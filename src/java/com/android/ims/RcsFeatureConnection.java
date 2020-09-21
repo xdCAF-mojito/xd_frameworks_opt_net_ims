@@ -18,9 +18,11 @@ package com.android.ims;
 
 import android.annotation.NonNull;
 import android.content.Context;
+import android.net.Uri;
 import android.os.IBinder;
 import android.os.RemoteException;
 import android.telephony.TelephonyManager;
+import android.telephony.ims.RcsContactUceCapability;
 import android.telephony.ims.aidl.IImsCapabilityCallback;
 import android.telephony.ims.aidl.IImsRcsFeature;
 import android.telephony.ims.aidl.IImsRegistration;
@@ -31,6 +33,7 @@ import android.telephony.ims.feature.ImsFeature;
 
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.telephony.Rlog;
+import java.util.List;
 
 /**
  * A container of the IImsServiceController binder, which implements all of the RcsFeatures that
@@ -295,6 +298,21 @@ public class RcsFeatureConnection extends FeatureConnection {
         synchronized (mLock) {
             checkServiceIsReady();
             getServiceInterface(mBinder).changeCapabilitiesConfiguration(request, callback);
+        }
+    }
+
+    public void requestPublication(RcsContactUceCapability capabilities, int taskId)
+            throws RemoteException {
+        synchronized (mLock) {
+            checkServiceIsReady();
+            getServiceInterface(mBinder).updateCapabilities(capabilities, taskId);
+        }
+    }
+
+    public void requestCapabilities(List<Uri> uris, int taskId) throws RemoteException {
+        synchronized (mLock) {
+            checkServiceIsReady();
+            getServiceInterface(mBinder).requestCapabilities(uris, taskId);
         }
     }
 
