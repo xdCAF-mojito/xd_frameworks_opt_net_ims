@@ -25,7 +25,6 @@ import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.Looper;
 import android.os.Message;
-import android.os.Parcel;
 import android.os.PersistableBundle;
 import android.os.RemoteException;
 import android.os.SystemProperties;
@@ -56,9 +55,6 @@ import android.telephony.ims.stub.ImsConfigImplBase;
 import android.telephony.ims.stub.ImsRegistrationImplBase;
 
 import com.android.ims.internal.IImsCallSession;
-import com.android.ims.internal.IImsEcbm;
-import com.android.ims.internal.IImsMultiEndpoint;
-import com.android.ims.internal.IImsUt;
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.telephony.ITelephony;
 import com.android.internal.telephony.util.HandlerExecutor;
@@ -66,11 +62,9 @@ import com.android.telephony.Rlog;
 
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Set;
 import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.concurrent.Executor;
 import java.util.concurrent.LinkedBlockingDeque;
@@ -232,9 +226,72 @@ public class ImsManager implements IFeatureConnector {
         }
     }
 
-    // Replaced with single-threaded executor for testing.
     @VisibleForTesting
-    public ExecutorFactory mExecutorFactory = new ImsExecutorFactory();
+    public interface MmTelFeatureConnectionFactory {
+        MmTelFeatureConnection create(Context context, int phoneId);
+    }
+
+    @VisibleForTesting
+    public interface SubscriptionManagerProxy {
+        boolean isValidSubscriptionId(int subId);
+        int[] getSubscriptionIds(int slotIndex);
+        int getDefaultVoicePhoneId();
+        int getIntegerSubscriptionProperty(int subId, String propKey, int defValue);
+        void setSubscriptionProperty(int subId, String propKey, String propValue);
+        int[] getActiveSubscriptionIdList();
+    }
+
+    // Default implementation which is mocked to make static dependency validation easier.
+    private static class DefaultSubscriptionManagerProxy implements SubscriptionManagerProxy {
+
+        private Context mContext;
+
+        public DefaultSubscriptionManagerProxy(Context context) {
+            mContext = context;
+        }
+
+        @Override
+        public boolean isValidSubscriptionId(int subId) {
+            return SubscriptionManager.isValidSubscriptionId(subId);
+        }
+
+        @Override
+        public int[] getSubscriptionIds(int slotIndex) {
+            return getSubscriptionManager().getSubscriptionIds(slotIndex);
+        }
+
+        @Override
+        public int getDefaultVoicePhoneId() {
+            return SubscriptionManager.getDefaultVoicePhoneId();
+        }
+
+        @Override
+        public int getIntegerSubscriptionProperty(int subId, String propKey, int defValue) {
+            return SubscriptionManager.getIntegerSubscriptionProperty(subId, propKey, defValue,
+                    mContext);
+        }
+
+        @Override
+        public void setSubscriptionProperty(int subId, String propKey, String propValue) {
+            SubscriptionManager.setSubscriptionProperty(subId, propKey, propValue);
+        }
+
+        @Override
+        public int[] getActiveSubscriptionIdList() {
+            return getSubscriptionManager().getActiveSubscriptionIdList();
+        }
+
+        private SubscriptionManager getSubscriptionManager() {
+            return mContext.getSystemService(SubscriptionManager.class);
+        }
+    }
+
+    // Replaced with single-threaded executor for testing.
+    private final ExecutorFactory mExecutorFactory;
+    // Replaced With mock for testing
+    private MmTelFeatureConnectionFactory mMmTelFeatureConnectionFactory =
+            MmTelFeatureConnection::create;
+    private SubscriptionManagerProxy mSubscriptionManagerProxy;
 
     private static HashMap<Integer, ImsManager> sImsManagerInstances =
             new HashMap<Integer, ImsManager>();
@@ -259,11 +316,6 @@ public class ImsManager implements IFeatureConnector {
 
     public static final String TRUE = "true";
     public static final String FALSE = "false";
-
-    // mRecentDisconnectReasons stores the last 16 disconnect reasons
-    private static final int MAX_RECENT_DISCONNECT_REASONS = 16;
-    private ConcurrentLinkedDeque<ImsReasonInfo> mRecentDisconnectReasons =
-            new ConcurrentLinkedDeque<>();
 
     /**
      * Gets a manager instance.
@@ -303,8 +355,8 @@ public class ImsManager implements IFeatureConnector {
      */
     @UnsupportedAppUsage
     public static boolean isEnhanced4gLteModeSettingEnabledByUser(Context context) {
-        ImsManager mgr = ImsManager.getInstance(context,
-                SubscriptionManager.getDefaultVoicePhoneId());
+        DefaultSubscriptionManagerProxy p = new DefaultSubscriptionManagerProxy(context);
+        ImsManager mgr = ImsManager.getInstance(context, p.getDefaultVoicePhoneId());
         if (mgr != null) {
             return mgr.isEnhanced4gLteModeSettingEnabledByUser();
         }
@@ -324,9 +376,9 @@ public class ImsManager implements IFeatureConnector {
      * return the default value.
      */
     public boolean isEnhanced4gLteModeSettingEnabledByUser() {
-        int setting = SubscriptionManager.getIntegerSubscriptionProperty(
+        int setting = mSubscriptionManagerProxy.getIntegerSubscriptionProperty(
                 getSubId(), SubscriptionManager.ENHANCED_4G_MODE_ENABLED,
-                SUB_PROPERTY_NOT_INITIALIZED, mContext);
+                SUB_PROPERTY_NOT_INITIALIZED);
         boolean onByDefault = getBooleanCarrierConfig(
                 CarrierConfigManager.KEY_ENHANCED_4G_LTE_ON_BY_DEFAULT_BOOL);
 
@@ -348,8 +400,8 @@ public class ImsManager implements IFeatureConnector {
      * instead.
      */
     public static void setEnhanced4gLteModeSetting(Context context, boolean enabled) {
-        ImsManager mgr = ImsManager.getInstance(context,
-                SubscriptionManager.getDefaultVoicePhoneId());
+        DefaultSubscriptionManagerProxy p = new DefaultSubscriptionManagerProxy(context);
+        ImsManager mgr = ImsManager.getInstance(context, p.getDefaultVoicePhoneId());
         if (mgr != null) {
             mgr.setEnhanced4gLteModeSetting(enabled);
         }
@@ -376,15 +428,14 @@ public class ImsManager implements IFeatureConnector {
                     CarrierConfigManager.KEY_ENHANCED_4G_LTE_ON_BY_DEFAULT_BOOL);
         }
 
-        int prevSetting = SubscriptionManager.getIntegerSubscriptionProperty(subId,
-                SubscriptionManager.ENHANCED_4G_MODE_ENABLED, SUB_PROPERTY_NOT_INITIALIZED,
-                mContext);
+        int prevSetting = mSubscriptionManagerProxy.getIntegerSubscriptionProperty(subId,
+                SubscriptionManager.ENHANCED_4G_MODE_ENABLED, SUB_PROPERTY_NOT_INITIALIZED);
 
         if (prevSetting != (enabled ?
                 ProvisioningManager.PROVISIONING_VALUE_ENABLED :
                 ProvisioningManager.PROVISIONING_VALUE_DISABLED)) {
             if (isSubIdValid(subId)) {
-                SubscriptionManager.setSubscriptionProperty(subId,
+                mSubscriptionManagerProxy.setSubscriptionProperty(subId,
                         SubscriptionManager.ENHANCED_4G_MODE_ENABLED,
                         booleanToPropertyString(enabled));
             } else {
@@ -409,8 +460,8 @@ public class ImsManager implements IFeatureConnector {
      */
     @UnsupportedAppUsage
     public static boolean isNonTtyOrTtyOnVolteEnabled(Context context) {
-        ImsManager mgr = ImsManager.getInstance(context,
-                SubscriptionManager.getDefaultVoicePhoneId());
+        DefaultSubscriptionManagerProxy p = new DefaultSubscriptionManagerProxy(context);
+        ImsManager mgr = ImsManager.getInstance(context, p.getDefaultVoicePhoneId());
         if (mgr != null) {
             return mgr.isNonTtyOrTtyOnVolteEnabled();
         }
@@ -446,8 +497,8 @@ public class ImsManager implements IFeatureConnector {
      */
     @UnsupportedAppUsage
     public static boolean isVolteEnabledByPlatform(Context context) {
-        ImsManager mgr = ImsManager.getInstance(context,
-                SubscriptionManager.getDefaultVoicePhoneId());
+        DefaultSubscriptionManagerProxy p = new DefaultSubscriptionManagerProxy(context);
+        ImsManager mgr = ImsManager.getInstance(context, p.getDefaultVoicePhoneId());
         if (mgr != null) {
             return mgr.isVolteEnabledByPlatform();
         }
@@ -536,8 +587,8 @@ public class ImsManager implements IFeatureConnector {
      * {@link #isVolteProvisionedOnDevice()} instead.
      */
     public static boolean isVolteProvisionedOnDevice(Context context) {
-        ImsManager mgr = ImsManager.getInstance(context,
-                SubscriptionManager.getDefaultVoicePhoneId());
+        DefaultSubscriptionManagerProxy p = new DefaultSubscriptionManagerProxy(context);
+        ImsManager mgr = ImsManager.getInstance(context, p.getDefaultVoicePhoneId());
         if (mgr != null) {
             return mgr.isVolteProvisionedOnDevice();
         }
@@ -579,8 +630,8 @@ public class ImsManager implements IFeatureConnector {
      * {@link #isWfcProvisionedOnDevice()} instead.
      */
     public static boolean isWfcProvisionedOnDevice(Context context) {
-        ImsManager mgr = ImsManager.getInstance(context,
-                SubscriptionManager.getDefaultVoicePhoneId());
+        DefaultSubscriptionManagerProxy p = new DefaultSubscriptionManagerProxy(context);
+        ImsManager mgr = ImsManager.getInstance(context, p.getDefaultVoicePhoneId());
         if (mgr != null) {
             return mgr.isWfcProvisionedOnDevice();
         }
@@ -617,8 +668,8 @@ public class ImsManager implements IFeatureConnector {
      * {@link #isVtProvisionedOnDevice()} instead.
      */
     public static boolean isVtProvisionedOnDevice(Context context) {
-        ImsManager mgr = ImsManager.getInstance(context,
-                SubscriptionManager.getDefaultVoicePhoneId());
+        DefaultSubscriptionManagerProxy p = new DefaultSubscriptionManagerProxy(context);
+        ImsManager mgr = ImsManager.getInstance(context, p.getDefaultVoicePhoneId());
         if (mgr != null) {
             return mgr.isVtProvisionedOnDevice();
         }
@@ -648,8 +699,8 @@ public class ImsManager implements IFeatureConnector {
      * {@link #isVtEnabledByPlatform()} instead.
      */
     public static boolean isVtEnabledByPlatform(Context context) {
-        ImsManager mgr = ImsManager.getInstance(context,
-                SubscriptionManager.getDefaultVoicePhoneId());
+        DefaultSubscriptionManagerProxy p = new DefaultSubscriptionManagerProxy(context);
+        ImsManager mgr = ImsManager.getInstance(context, p.getDefaultVoicePhoneId());
         if (mgr != null) {
             return mgr.isVtEnabledByPlatform();
         }
@@ -685,8 +736,8 @@ public class ImsManager implements IFeatureConnector {
      * {@link #isVtEnabledByUser()} instead.
      */
     public static boolean isVtEnabledByUser(Context context) {
-        ImsManager mgr = ImsManager.getInstance(context,
-                SubscriptionManager.getDefaultVoicePhoneId());
+        DefaultSubscriptionManagerProxy p = new DefaultSubscriptionManagerProxy(context);
+        ImsManager mgr = ImsManager.getInstance(context, p.getDefaultVoicePhoneId());
         if (mgr != null) {
             return mgr.isVtEnabledByUser();
         }
@@ -699,9 +750,9 @@ public class ImsManager implements IFeatureConnector {
      * returns true as default value.
      */
     public boolean isVtEnabledByUser() {
-        int setting = SubscriptionManager.getIntegerSubscriptionProperty(
+        int setting = mSubscriptionManagerProxy.getIntegerSubscriptionProperty(
                 getSubId(), SubscriptionManager.VT_IMS_ENABLED,
-                SUB_PROPERTY_NOT_INITIALIZED, mContext);
+                SUB_PROPERTY_NOT_INITIALIZED);
 
         // If it's never set, by default we return true.
         return (setting == SUB_PROPERTY_NOT_INITIALIZED
@@ -714,8 +765,8 @@ public class ImsManager implements IFeatureConnector {
      * @deprecated Does not support MSIM devices. Please use {@link #setVtSetting(boolean)} instead.
      */
     public static void setVtSetting(Context context, boolean enabled) {
-        ImsManager mgr = ImsManager.getInstance(context,
-                SubscriptionManager.getDefaultVoicePhoneId());
+        DefaultSubscriptionManagerProxy p = new DefaultSubscriptionManagerProxy(context);
+        ImsManager mgr = ImsManager.getInstance(context, p.getDefaultVoicePhoneId());
         if (mgr != null) {
             mgr.setVtSetting(enabled);
         }
@@ -733,7 +784,7 @@ public class ImsManager implements IFeatureConnector {
 
         int subId = getSubId();
         if (isSubIdValid(subId)) {
-            SubscriptionManager.setSubscriptionProperty(subId, SubscriptionManager.VT_IMS_ENABLED,
+            mSubscriptionManagerProxy.setSubscriptionProperty(subId, SubscriptionManager.VT_IMS_ENABLED,
                     booleanToPropertyString(enabled));
         } else {
             loge("setVtSetting: sub id invalid, skip modifying vt state in subinfo db; subId="
@@ -769,8 +820,8 @@ public class ImsManager implements IFeatureConnector {
      * {@link #isTurnOffImsAllowedByPlatform()} instead.
      */
     private static boolean isTurnOffImsAllowedByPlatform(Context context) {
-        ImsManager mgr = ImsManager.getInstance(context,
-                SubscriptionManager.getDefaultVoicePhoneId());
+        DefaultSubscriptionManagerProxy p = new DefaultSubscriptionManagerProxy(context);
+        ImsManager mgr = ImsManager.getInstance(context, p.getDefaultVoicePhoneId());
         if (mgr != null) {
             return mgr.isTurnOffImsAllowedByPlatform();
         }
@@ -803,8 +854,8 @@ public class ImsManager implements IFeatureConnector {
      * {@link #isWfcEnabledByUser()} instead.
      */
     public static boolean isWfcEnabledByUser(Context context) {
-        ImsManager mgr = ImsManager.getInstance(context,
-                SubscriptionManager.getDefaultVoicePhoneId());
+        DefaultSubscriptionManagerProxy p = new DefaultSubscriptionManagerProxy(context);
+        ImsManager mgr = ImsManager.getInstance(context, p.getDefaultVoicePhoneId());
         if (mgr != null) {
             return mgr.isWfcEnabledByUser();
         }
@@ -817,9 +868,9 @@ public class ImsManager implements IFeatureConnector {
      * queries CarrierConfig value as default.
      */
     public boolean isWfcEnabledByUser() {
-        int setting = SubscriptionManager.getIntegerSubscriptionProperty(
+        int setting = mSubscriptionManagerProxy.getIntegerSubscriptionProperty(
                 getSubId(), SubscriptionManager.WFC_IMS_ENABLED,
-                SUB_PROPERTY_NOT_INITIALIZED, mContext);
+                SUB_PROPERTY_NOT_INITIALIZED);
 
         // SUB_PROPERTY_NOT_INITIALIZED indicates it's never set in sub db.
         if (setting == SUB_PROPERTY_NOT_INITIALIZED) {
@@ -836,8 +887,8 @@ public class ImsManager implements IFeatureConnector {
      * {@link #setWfcSetting} instead.
      */
     public static void setWfcSetting(Context context, boolean enabled) {
-        ImsManager mgr = ImsManager.getInstance(context,
-                SubscriptionManager.getDefaultVoicePhoneId());
+        DefaultSubscriptionManagerProxy p = new DefaultSubscriptionManagerProxy(context);
+        ImsManager mgr = ImsManager.getInstance(context, p.getDefaultVoicePhoneId());
         if (mgr != null) {
             mgr.setWfcSetting(enabled);
         }
@@ -855,8 +906,8 @@ public class ImsManager implements IFeatureConnector {
 
         int subId = getSubId();
         if (isSubIdValid(subId)) {
-            SubscriptionManager.setSubscriptionProperty(subId, SubscriptionManager.WFC_IMS_ENABLED,
-                    booleanToPropertyString(enabled));
+            mSubscriptionManagerProxy.setSubscriptionProperty(subId,
+                    SubscriptionManager.WFC_IMS_ENABLED, booleanToPropertyString(enabled));
         } else {
             loge("setWfcSetting: invalid sub id, can not set WFC setting in siminfo db; subId="
                     + subId);
@@ -911,8 +962,8 @@ public class ImsManager implements IFeatureConnector {
      * @deprecated Doesn't support MSIM devices. Use {@link #getWfcMode(boolean roaming)} instead.
      */
     public static int getWfcMode(Context context) {
-        ImsManager mgr = ImsManager.getInstance(context,
-                SubscriptionManager.getDefaultVoicePhoneId());
+        DefaultSubscriptionManagerProxy p = new DefaultSubscriptionManagerProxy(context);
+        ImsManager mgr = ImsManager.getInstance(context, p.getDefaultVoicePhoneId());
         if (mgr != null) {
             return mgr.getWfcMode();
         }
@@ -934,8 +985,8 @@ public class ImsManager implements IFeatureConnector {
      * @deprecated Doesn't support MSIM devices. Use {@link #setWfcMode(int)} instead.
      */
     public static void setWfcMode(Context context, int wfcMode) {
-        ImsManager mgr = ImsManager.getInstance(context,
-                SubscriptionManager.getDefaultVoicePhoneId());
+        DefaultSubscriptionManagerProxy p = new DefaultSubscriptionManagerProxy(context);
+        ImsManager mgr = ImsManager.getInstance(context, p.getDefaultVoicePhoneId());
         if (mgr != null) {
             mgr.setWfcMode(wfcMode);
         }
@@ -958,8 +1009,8 @@ public class ImsManager implements IFeatureConnector {
      * @deprecated Doesn't support MSIM devices. Use {@link #getWfcMode(boolean)} instead.
      */
     public static int getWfcMode(Context context, boolean roaming) {
-        ImsManager mgr = ImsManager.getInstance(context,
-                SubscriptionManager.getDefaultVoicePhoneId());
+        DefaultSubscriptionManagerProxy p = new DefaultSubscriptionManagerProxy(context);
+        ImsManager mgr = ImsManager.getInstance(context, p.getDefaultVoicePhoneId());
         if (mgr != null) {
             return mgr.getWfcMode(roaming);
         }
@@ -1011,8 +1062,8 @@ public class ImsManager implements IFeatureConnector {
      */
     private int getSettingFromSubscriptionManager(String subSetting, String defaultConfigKey) {
         int result;
-        result = SubscriptionManager.getIntegerSubscriptionProperty(getSubId(), subSetting,
-                SUB_PROPERTY_NOT_INITIALIZED, mContext);
+        result = mSubscriptionManagerProxy.getIntegerSubscriptionProperty(getSubId(), subSetting,
+                SUB_PROPERTY_NOT_INITIALIZED);
 
         // SUB_PROPERTY_NOT_INITIALIZED indicates it's never set in sub db.
         if (result == SUB_PROPERTY_NOT_INITIALIZED) {
@@ -1030,8 +1081,8 @@ public class ImsManager implements IFeatureConnector {
      * instead.
      */
     public static void setWfcMode(Context context, int wfcMode, boolean roaming) {
-        ImsManager mgr = ImsManager.getInstance(context,
-                SubscriptionManager.getDefaultVoicePhoneId());
+        DefaultSubscriptionManagerProxy p = new DefaultSubscriptionManagerProxy(context);
+        ImsManager mgr = ImsManager.getInstance(context, p.getDefaultVoicePhoneId());
         if (mgr != null) {
             mgr.setWfcMode(wfcMode, roaming);
         }
@@ -1048,11 +1099,11 @@ public class ImsManager implements IFeatureConnector {
         if (isSubIdValid(subId)) {
             if (!roaming) {
                 if (DBG) log("setWfcMode(i,b) - setting=" + wfcMode);
-                SubscriptionManager.setSubscriptionProperty(subId, SubscriptionManager.WFC_IMS_MODE,
+                mSubscriptionManagerProxy.setSubscriptionProperty(subId, SubscriptionManager.WFC_IMS_MODE,
                         Integer.toString(wfcMode));
             } else {
                 if (DBG) log("setWfcMode(i,b) (roaming) - setting=" + wfcMode);
-                SubscriptionManager.setSubscriptionProperty(subId,
+                mSubscriptionManagerProxy.setSubscriptionProperty(subId,
                         SubscriptionManager.WFC_IMS_ROAMING_MODE, Integer.toString(wfcMode));
             }
         } else {
@@ -1071,7 +1122,7 @@ public class ImsManager implements IFeatureConnector {
     }
 
     private int getSubId() {
-        int[] subIds = SubscriptionManager.getSubId(mPhoneId);
+        int[] subIds = mSubscriptionManagerProxy.getSubscriptionIds(mPhoneId);
         int subId = SubscriptionManager.INVALID_SUBSCRIPTION_ID;
         if (subIds != null && subIds.length >= 1) {
             subId = subIds[0];
@@ -1098,8 +1149,8 @@ public class ImsManager implements IFeatureConnector {
      * {@link #isWfcRoamingEnabledByUser()} instead.
      */
     public static boolean isWfcRoamingEnabledByUser(Context context) {
-        ImsManager mgr = ImsManager.getInstance(context,
-                SubscriptionManager.getDefaultVoicePhoneId());
+        DefaultSubscriptionManagerProxy p = new DefaultSubscriptionManagerProxy(context);
+        ImsManager mgr = ImsManager.getInstance(context, p.getDefaultVoicePhoneId());
         if (mgr != null) {
             return mgr.isWfcRoamingEnabledByUser();
         }
@@ -1112,9 +1163,9 @@ public class ImsManager implements IFeatureConnector {
      * queries CarrierConfig value as default.
      */
     public boolean isWfcRoamingEnabledByUser() {
-        int setting =  SubscriptionManager.getIntegerSubscriptionProperty(
+        int setting =  mSubscriptionManagerProxy.getIntegerSubscriptionProperty(
                 getSubId(), SubscriptionManager.WFC_IMS_ROAMING_ENABLED,
-                SUB_PROPERTY_NOT_INITIALIZED, mContext);
+                SUB_PROPERTY_NOT_INITIALIZED);
         if (setting == SUB_PROPERTY_NOT_INITIALIZED) {
             return getBooleanCarrierConfig(
                             CarrierConfigManager.KEY_CARRIER_DEFAULT_WFC_IMS_ROAMING_ENABLED_BOOL);
@@ -1127,8 +1178,8 @@ public class ImsManager implements IFeatureConnector {
      * Change persistent WFC roaming enabled setting
      */
     public static void setWfcRoamingSetting(Context context, boolean enabled) {
-        ImsManager mgr = ImsManager.getInstance(context,
-                SubscriptionManager.getDefaultVoicePhoneId());
+        DefaultSubscriptionManagerProxy p = new DefaultSubscriptionManagerProxy(context);
+        ImsManager mgr = ImsManager.getInstance(context, p.getDefaultVoicePhoneId());
         if (mgr != null) {
             mgr.setWfcRoamingSetting(enabled);
         }
@@ -1139,7 +1190,7 @@ public class ImsManager implements IFeatureConnector {
      * Change persistent WFC roaming enabled setting
      */
     public void setWfcRoamingSetting(boolean enabled) {
-        SubscriptionManager.setSubscriptionProperty(getSubId(),
+        mSubscriptionManagerProxy.setSubscriptionProperty(getSubId(),
                 SubscriptionManager.WFC_IMS_ROAMING_ENABLED, booleanToPropertyString(enabled)
         );
 
@@ -1169,8 +1220,8 @@ public class ImsManager implements IFeatureConnector {
      * instead.
      */
     public static boolean isWfcEnabledByPlatform(Context context) {
-        ImsManager mgr = ImsManager.getInstance(context,
-                SubscriptionManager.getDefaultVoicePhoneId());
+        DefaultSubscriptionManagerProxy p = new DefaultSubscriptionManagerProxy(context);
+        ImsManager mgr = ImsManager.getInstance(context, p.getDefaultVoicePhoneId());
         if (mgr != null) {
             return mgr.isWfcEnabledByPlatform();
         }
@@ -1291,89 +1342,56 @@ public class ImsManager implements IFeatureConnector {
         return true;
     }
 
-    /**
+   /**
      * Sync carrier config and user settings with ImsConfigImplBase implementation.
-     *
-     * @param context for the manager object
-     * @param phoneId phone id
-     * @param force update
-     *
-     * @deprecated Doesn't support MSIM devices. Use {@link #updateImsServiceConfig(boolean)}
-     * instead.
      */
-    public static void updateImsServiceConfig(Context context, int phoneId, boolean force) {
-        ImsManager mgr = ImsManager.getInstance(context, phoneId);
-        if (mgr != null) {
-            mgr.updateImsServiceConfig(force);
-        }
-        Rlog.e(TAG, "updateImsServiceConfig: ImsManager null, returning without update.");
-    }
-
-    /**
-     * Sync carrier config and user settings with ImsConfigImplBase implementation.
-     *
-     * @param force update
-     */
-    public void updateImsServiceConfig(boolean force) {
-        if (!force) {
-            TelephonyManager tm = new TelephonyManager(mContext, getSubId());
-            if (tm.getSimState() != TelephonyManager.SIM_STATE_READY) {
-                log("updateImsServiceConfig: SIM not ready");
-                // Don't disable IMS if SIM is not ready
-                return;
-            }
-        }
-
+    public void updateImsServiceConfig() {
         int subId = getSubId();
         if (!SubscriptionManager.from(mContext).isActiveSubId(subId)) {
             log("updateImsServiceConfigForSlot: subId not active: " + subId);
             return;
         }
+        try {
+            PersistableBundle imsCarrierConfigs =
+                    mConfigManager.getConfigByComponentForSubId(
+                            CarrierConfigManager.Ims.KEY_PREFIX, getSubId());
 
-        if (!mConfigUpdated || force) {
-            try {
-                PersistableBundle imsCarrierConfigs =
-                        mConfigManager.getConfigByComponentForSubId(
-                                CarrierConfigManager.Ims.KEY_PREFIX, getSubId());
+            updateImsCarrierConfigs(imsCarrierConfigs);
 
-                updateImsCarrierConfigs(imsCarrierConfigs);
+            // Note: currently the order of updates is set to produce different order of
+            // changeEnabledCapabilities() function calls from setAdvanced4GMode(). This is done
+            // to differentiate this code path from vendor code perspective.
+            CapabilityChangeRequest request = new CapabilityChangeRequest();
+            updateVolteFeatureValue(request);
+            updateWfcFeatureAndProvisionedValues(request);
+            updateVideoCallFeatureValue(request);
+            // Only turn on IMS for RTT if there's an active subscription present. If not, the
+            // modem will be in emergency-call-only mode and will use separate signaling to
+            // establish an RTT emergency call.
+            boolean isImsNeededForRtt = updateRttConfigValue() && isActiveSubscriptionPresent();
+            // Supplementary services over UT do not require IMS registration. Do not alter IMS
+            // registration based on UT.
+            updateUtFeatureValue(request);
 
-                // Note: currently the order of updates is set to produce different order of
-                // changeEnabledCapabilities() function calls from setAdvanced4GMode(). This is done
-                // to differentiate this code path from vendor code perspective.
-                CapabilityChangeRequest request = new CapabilityChangeRequest();
-                updateVolteFeatureValue(request);
-                updateWfcFeatureAndProvisionedValues(request);
-                updateVideoCallFeatureValue(request);
-                // Only turn on IMS for RTT if there's an active subscription present. If not, the
-                // modem will be in emergency-call-only mode and will use separate signaling to
-                // establish an RTT emergency call.
-                boolean isImsNeededForRtt = updateRttConfigValue() && isActiveSubscriptionPresent();
-                // Supplementary services over UT do not require IMS registration. Do not alter IMS
-                // registration based on UT.
-                updateUtFeatureValue(request);
+            // Send the batched request to the modem.
+            changeMmTelCapability(request);
 
-                // Send the batched request to the modem.
-                changeMmTelCapability(request);
-
-                if (isImsNeededForRtt || !isTurnOffImsAllowedByPlatform() || isImsNeeded(request)) {
-                    // Turn on IMS if it is used.
-                    // Also, if turning off is not allowed for current carrier,
-                    // we need to turn IMS on because it might be turned off before
-                    // phone switched to current carrier.
-                    log("updateImsServiceConfig: turnOnIms");
-                    turnOnIms();
-                } else {
-                    // Turn off IMS if it is not used AND turning off is allowed for carrier.
-                    log("updateImsServiceConfig: turnOffIms");
-                    turnOffIms();
-                }
-
-                mConfigUpdated = true;
-            } catch (ImsException e) {
-                loge("updateImsServiceConfig: ", e);
-                mConfigUpdated = false;
+            if (isImsNeededForRtt || !isTurnOffImsAllowedByPlatform() || isImsNeeded(request)) {
+                // Turn on IMS if it is used.
+                // Also, if turning off is not allowed for current carrier,
+                // we need to turn IMS on because it might be turned off before
+                // phone switched to current carrier.
+                log("updateImsServiceConfig: turnOnIms");
+                turnOnIms();
+            } else {
+                // Turn off IMS if it is not used AND turning off is allowed for carrier.
+                log("updateImsServiceConfig: turnOffIms");
+                turnOffIms();
             }
+            mConfigUpdated = true;
+        } catch (ImsException e) {
+            loge("updateImsServiceConfig: ", e);
+            mConfigUpdated = false;
         }
     }
 
@@ -1531,12 +1549,30 @@ public class ImsManager implements IFeatureConnector {
     /**
      * Do NOT use this directly, instead use {@link #getInstance(Context, int)}.
      */
-    @VisibleForTesting
-    public ImsManager(Context context, int phoneId) {
+    private ImsManager(Context context, int phoneId) {
         mContext = context;
         mPhoneId = phoneId;
+        mSubscriptionManagerProxy = new DefaultSubscriptionManagerProxy(context);
         mConfigManager = (CarrierConfigManager) context.getSystemService(
                 Context.CARRIER_CONFIG_SERVICE);
+        mExecutorFactory = new ImsExecutorFactory();
+        createImsService();
+    }
+
+    /**
+     * Used for testing only to inject dependencies.
+     */
+    @VisibleForTesting
+    public ImsManager(Context context, int phoneId, MmTelFeatureConnectionFactory factory,
+            SubscriptionManagerProxy proxy) {
+        mContext = context;
+        mPhoneId = phoneId;
+        mMmTelFeatureConnectionFactory = factory;
+        mSubscriptionManagerProxy = proxy;
+        mConfigManager = (CarrierConfigManager) context.getSystemService(
+                Context.CARRIER_CONFIG_SERVICE);
+        // Do not multithread tests
+        mExecutorFactory = Runnable::run;
         createImsService();
     }
 
@@ -1885,9 +1921,6 @@ public class ImsManager implements IFeatureConnector {
         if (mMmTelFeatureConnection != null) {
             mMmTelFeatureConnection.closeConnection();
         }
-        mUt = null;
-        mEcbm = null;
-        mMultiEndpoint = null;
     }
 
     /**
@@ -1897,26 +1930,20 @@ public class ImsManager implements IFeatureConnector {
      * @throws ImsException if getting the Ut interface results in an error
      */
     public ImsUtInterface getSupplementaryServiceConfiguration() throws ImsException {
-        // FIXME: manage the multiple Ut interfaces based on the session id
-        if (mUt != null && mUt.isBinderAlive()) {
-            return mUt;
-        }
-
+        ImsUt iUt = null;
         checkAndThrowExceptionIfServiceUnavailable();
         try {
-            IImsUt iUt = mMmTelFeatureConnection.getUtInterface();
+            iUt = mMmTelFeatureConnection.getUtInterface();
 
             if (iUt == null) {
                 throw new ImsException("getSupplementaryServiceConfiguration()",
                         ImsReasonInfo.CODE_UT_NOT_SUPPORTED);
             }
-
-            mUt = new ImsUt(iUt);
         } catch (RemoteException e) {
             throw new ImsException("getSupplementaryServiceConfiguration()", e,
                     ImsReasonInfo.CODE_LOCAL_IMS_SERVICE_DOWN);
         }
-        return mUt;
+        return iUt;
     }
 
     /**
@@ -2019,7 +2046,7 @@ public class ImsManager implements IFeatureConnector {
     public ImsConfig getConfigInterface() throws ImsException {
         checkAndThrowExceptionIfServiceUnavailable();
 
-        IImsConfig config = mMmTelFeatureConnection.getConfigInterface();
+        IImsConfig config = mMmTelFeatureConnection.getConfig();
         if (config == null) {
             throw new ImsException("getConfigInterface()",
                     ImsReasonInfo.CODE_LOCAL_SERVICE_UNAVAILABLE);
@@ -2234,31 +2261,6 @@ public class ImsManager implements IFeatureConnector {
         }
     }
 
-    private ImsReasonInfo makeACopy(ImsReasonInfo imsReasonInfo) {
-        Parcel p = Parcel.obtain();
-        imsReasonInfo.writeToParcel(p, 0);
-        p.setDataPosition(0);
-        ImsReasonInfo clonedReasonInfo = ImsReasonInfo.CREATOR.createFromParcel(p);
-        p.recycle();
-        return clonedReasonInfo;
-    }
-
-    /**
-     * Get Recent IMS Disconnect Reasons.
-     *
-     * @return ArrayList of ImsReasonInfo objects. MAX size of the arraylist
-     * is MAX_RECENT_DISCONNECT_REASONS. The objects are in the
-     * chronological order.
-     */
-    public ArrayList<ImsReasonInfo> getRecentImsDisconnectReasons() {
-        ArrayList<ImsReasonInfo> disconnectReasons = new ArrayList<>();
-
-        for (ImsReasonInfo reason : mRecentDisconnectReasons) {
-            disconnectReasons.add(makeACopy(reason));
-        }
-        return disconnectReasons;
-    }
-
     @Override
     public int getImsServiceState() throws ImsException {
         return mMmTelFeatureConnection.getFeatureState();
@@ -2346,7 +2348,7 @@ public class ImsManager implements IFeatureConnector {
      * Creates a connection to the ImsService associated with this slot.
      */
     private void createImsService() {
-        mMmTelFeatureConnection = MmTelFeatureConnection.create(mContext, mPhoneId);
+        mMmTelFeatureConnection = mMmTelFeatureConnectionFactory.create(mContext, mPhoneId);
 
         // Forwarding interface to tell mStatusCallbacks that the Proxy is unavailable.
         mMmTelFeatureConnection.setStatusCallback(new FeatureConnection.IFeatureUpdate() {
@@ -2480,14 +2482,6 @@ public class ImsManager implements IFeatureConnector {
         tm.disableIms(mPhoneId);
     }
 
-    private void addToRecentDisconnectReasons(ImsReasonInfo reason) {
-        if (reason == null) return;
-        while (mRecentDisconnectReasons.size() >= MAX_RECENT_DISCONNECT_REASONS) {
-            mRecentDisconnectReasons.removeFirst();
-        }
-        mRecentDisconnectReasons.addLast(reason);
-    }
-
     /**
      * Gets the ECBM interface to request ECBM exit.
      *
@@ -2495,24 +2489,20 @@ public class ImsManager implements IFeatureConnector {
      * @throws ImsException if getting the ECBM interface results in an error
      */
     public ImsEcbm getEcbmInterface() throws ImsException {
-        if (mEcbm != null && mEcbm.isBinderAlive()) {
-            return mEcbm;
-        }
-
+        ImsEcbm iEcbm = null;
         checkAndThrowExceptionIfServiceUnavailable();
         try {
-            IImsEcbm iEcbm = mMmTelFeatureConnection.getEcbmInterface();
+            iEcbm = mMmTelFeatureConnection.getEcbmInterface();
 
             if (iEcbm == null) {
                 throw new ImsException("getEcbmInterface()",
                         ImsReasonInfo.CODE_ECBM_NOT_SUPPORTED);
             }
-            mEcbm = new ImsEcbm(iEcbm);
         } catch (RemoteException e) {
             throw new ImsException("getEcbmInterface()", e,
                     ImsReasonInfo.CODE_LOCAL_IMS_SERVICE_DOWN);
         }
-        return mEcbm;
+        return iEcbm;
     }
 
     public void sendSms(int token, int messageRef, String format, String smsc, boolean isRetry,
@@ -2598,25 +2588,21 @@ public class ImsManager implements IFeatureConnector {
      * @throws ImsException if getting the multi-endpoint interface results in an error
      */
     public ImsMultiEndpoint getMultiEndpointInterface() throws ImsException {
-        if (mMultiEndpoint != null && mMultiEndpoint.isBinderAlive()) {
-            return mMultiEndpoint;
-        }
-
         checkAndThrowExceptionIfServiceUnavailable();
+        ImsMultiEndpoint iImsMultiEndpoint;
         try {
-            IImsMultiEndpoint iImsMultiEndpoint = mMmTelFeatureConnection.getMultiEndpointInterface();
+            iImsMultiEndpoint = mMmTelFeatureConnection.getMultiEndpointInterface();
 
             if (iImsMultiEndpoint == null) {
                 throw new ImsException("getMultiEndpointInterface()",
                         ImsReasonInfo.CODE_MULTIENDPOINT_NOT_SUPPORTED);
             }
-            mMultiEndpoint = new ImsMultiEndpoint(iImsMultiEndpoint);
         } catch (RemoteException e) {
             throw new ImsException("getMultiEndpointInterface()", e,
                     ImsReasonInfo.CODE_LOCAL_IMS_SERVICE_DOWN);
         }
 
-        return mMultiEndpoint;
+        return iImsMultiEndpoint;
     }
 
     /**
@@ -2627,8 +2613,8 @@ public class ImsManager implements IFeatureConnector {
      * @hide
      */
     public static void factoryReset(Context context) {
-        ImsManager mgr = ImsManager.getInstance(context,
-                SubscriptionManager.getDefaultVoicePhoneId());
+        DefaultSubscriptionManagerProxy p = new DefaultSubscriptionManagerProxy(context);
+        ImsManager mgr = ImsManager.getInstance(context, p.getDefaultVoicePhoneId());
         if (mgr != null) {
             mgr.factoryReset();
         }
@@ -2644,38 +2630,38 @@ public class ImsManager implements IFeatureConnector {
         int subId = getSubId();
         if (isSubIdValid(subId)) {
             // Set VoLTE to default
-            SubscriptionManager.setSubscriptionProperty(subId,
+            mSubscriptionManagerProxy.setSubscriptionProperty(subId,
                     SubscriptionManager.ENHANCED_4G_MODE_ENABLED,
                     Integer.toString(SUB_PROPERTY_NOT_INITIALIZED));
 
             // Set VoWiFi to default
-            SubscriptionManager.setSubscriptionProperty(subId,
+            mSubscriptionManagerProxy.setSubscriptionProperty(subId,
                     SubscriptionManager.WFC_IMS_ENABLED,
                     Integer.toString(SUB_PROPERTY_NOT_INITIALIZED));
 
             // Set VoWiFi mode to default
-            SubscriptionManager.setSubscriptionProperty(subId,
+            mSubscriptionManagerProxy.setSubscriptionProperty(subId,
                     SubscriptionManager.WFC_IMS_MODE,
                     Integer.toString(SUB_PROPERTY_NOT_INITIALIZED));
 
             // Set VoWiFi roaming to default
-            SubscriptionManager.setSubscriptionProperty(subId,
+            mSubscriptionManagerProxy.setSubscriptionProperty(subId,
                     SubscriptionManager.WFC_IMS_ROAMING_ENABLED,
                     Integer.toString(SUB_PROPERTY_NOT_INITIALIZED));
 
             // Set VoWiFi roaming mode to default
-            SubscriptionManager.setSubscriptionProperty(subId,
+            mSubscriptionManagerProxy.setSubscriptionProperty(subId,
                     SubscriptionManager.WFC_IMS_ROAMING_MODE,
                     Integer.toString(SUB_PROPERTY_NOT_INITIALIZED));
 
 
             // Set VT to default
-            SubscriptionManager.setSubscriptionProperty(subId,
+            mSubscriptionManagerProxy.setSubscriptionProperty(subId,
                     SubscriptionManager.VT_IMS_ENABLED,
                     Integer.toString(SUB_PROPERTY_NOT_INITIALIZED));
 
             // Set RCS UCE to default
-            SubscriptionManager.setSubscriptionProperty(subId,
+            mSubscriptionManagerProxy.setSubscriptionProperty(subId,
                     SubscriptionManager.IMS_RCS_UCE_ENABLED, Integer.toString(
                             SUBINFO_PROPERTY_FALSE));
         } else {
@@ -2683,7 +2669,7 @@ public class ImsManager implements IFeatureConnector {
         }
 
         // Push settings to ImsConfig
-        updateImsServiceConfig(true);
+        updateImsServiceConfig();
     }
 
     public void setVolteProvisioned(boolean isProvisioned) {
@@ -2782,20 +2768,18 @@ public class ImsManager implements IFeatureConnector {
      * @return {@code true} if valid, {@code false} otherwise.
      */
     private boolean isSubIdValid(int subId) {
-        return SubscriptionManager.isValidSubscriptionId(subId) &&
+        return mSubscriptionManagerProxy.isValidSubscriptionId(subId) &&
                 subId != SubscriptionManager.DEFAULT_SUBSCRIPTION_ID;
     }
 
     private boolean isActiveSubscriptionPresent() {
-        SubscriptionManager sm = (SubscriptionManager) mContext.getSystemService(
-                Context.TELEPHONY_SUBSCRIPTION_SERVICE);
-        return sm.getActiveSubscriptionIdList().length > 0;
+        return mSubscriptionManagerProxy.getActiveSubscriptionIdList().length > 0;
     }
 
     private void updateImsCarrierConfigs(PersistableBundle configs) throws ImsException {
         checkAndThrowExceptionIfServiceUnavailable();
 
-        IImsConfig config = mMmTelFeatureConnection.getConfigInterface();
+        IImsConfig config = mMmTelFeatureConnection.getConfig();
         if (config == null) {
             throw new ImsException("getConfigInterface()",
                     ImsReasonInfo.CODE_LOCAL_SERVICE_UNAVAILABLE);
