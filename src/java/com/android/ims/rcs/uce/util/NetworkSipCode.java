@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019 The Android Open Source Project
+ * Copyright (C) 2020 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,11 +14,15 @@
  * limitations under the License.
  */
 
-package com.android.ims;
+package com.android.ims.rcs.uce.util;
 
-public interface IFeatureConnector<T> {
-    int getImsServiceState() throws ImsException;
-    void addNotifyStatusChangedCallbackIfAvailable(FeatureConnection.IFeatureUpdate callback)
-            throws android.telephony.ims.ImsException;
-    void removeNotifyStatusChangedCallback(FeatureConnection.IFeatureUpdate callback);
+/**
+ * Define the network sip code and the reason.
+ */
+public class NetworkSipCode {
+    public static final int SIP_CODE_OK = 200;
+    public static final int SIP_CODE_SERVICE_UNAVAILABLE = 503;
+
+    public static final String SIP_OK = "OK";
+    public static final String SIP_SERVICE_UNAVAILABLE = "Service Unavailable";
 }
