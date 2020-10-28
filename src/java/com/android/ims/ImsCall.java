@@ -2174,10 +2174,6 @@ public class ImsCall implements ICall {
                 ImsCallSession transientConferenceSession = mTransientConferenceSession;
                 mTransientConferenceSession = null;
 
-                // Clear the listener for this transient session, we'll create a new listener
-                // when it is attached to the final ImsCall that it should live on.
-                transientConferenceSession.setListener(null);
-
                 // Determine which call the transient session should be moved to.  If the current
                 // call session is still alive and the merge peer's session is not, we have a
                 // situation where the current call failed to merge into the conference but the
