@@ -2174,10 +2174,6 @@ public class ImsCall implements ICall {
                 ImsCallSession transientConferenceSession = mTransientConferenceSession;
                 mTransientConferenceSession = null;
 
-                // Clear the listener for this transient session, we'll create a new listener
-                // when it is attached to the final ImsCall that it should live on.
-                transientConferenceSession.setListener(null);
-
                 // Determine which call the transient session should be moved to.  If the current
                 // call session is still alive and the merge peer's session is not, we have a
                 // situation where the current call failed to merge into the conference but the
@@ -2443,10 +2439,12 @@ public class ImsCall implements ICall {
             ImsCallProfile updatedProfile = session.getCallProfile();
             synchronized(ImsCall.this) {
                 listener = mListener;
-                mCallProfile.mMediaProfile.copyFrom(profile);
                 // The ImsCallProfile may have updated here (for example call state change). Query
                 // the potentially updated call profile to pick up these changes.
                 setCallProfile(updatedProfile);
+                // Apply the new mediaProfile on top of the Call Profile so it is not ignored in
+                // case the ImsService has not had a chance to update it yet.
+                mCallProfile.mMediaProfile.copyFrom(profile);
             }
 
             if (listener != null) {
