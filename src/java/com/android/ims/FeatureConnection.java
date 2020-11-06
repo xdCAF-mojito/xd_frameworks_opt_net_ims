@@ -22,8 +22,10 @@ import android.os.IBinder;
 import android.os.Looper;
 import android.os.RemoteException;
 import android.telephony.TelephonyManager;
+import android.telephony.ims.ImsService;
 import android.telephony.ims.aidl.IImsConfig;
 import android.telephony.ims.aidl.IImsRegistration;
+import android.telephony.ims.aidl.ISipTransport;
 import android.telephony.ims.feature.ImsFeature;
 import android.telephony.ims.stub.ImsRegistrationImplBase;
 import android.util.Log;
@@ -49,13 +51,16 @@ public abstract class FeatureConnection {
     protected long mFeatureCapabilities;
     private final IImsRegistration mRegistrationBinder;
     private final IImsConfig mConfigBinder;
+    private final ISipTransport mSipTransportBinder;
     protected final Object mLock = new Object();
 
-    public FeatureConnection(Context context, int slotId, IImsConfig c, IImsRegistration r) {
+    public FeatureConnection(Context context, int slotId, IImsConfig c, IImsRegistration r,
+            ISipTransport s) {
         mSlotId = slotId;
         mContext = context;
         mRegistrationBinder = r;
         mConfigBinder = c;
+        mSipTransportBinder = s;
     }
 
     protected TelephonyManager getTelephonyManager() {
@@ -124,6 +129,10 @@ public abstract class FeatureConnection {
         return mConfigBinder;
     }
 
+    public @Nullable ISipTransport getSipTransport() {
+        return mSipTransportBinder;
+    }
+
     @VisibleForTesting
     public void checkServiceIsReady() throws RemoteException {
         if (!sImsSupportedOnDevice) {
@@ -173,6 +182,14 @@ public abstract class FeatureConnection {
                 onFeatureCapabilitiesUpdated(caps);
             }
         }
+    }
+
+    public boolean isCapable(@ImsService.ImsServiceCapability long capabilities)
+            throws RemoteException {
+        if (!isBinderAlive()) {
+            throw new RemoteException("isCapable: ImsService is not alive");
+        }
+        return (getFeatureCapabilties() & capabilities) > 0;
     }
 
     /**

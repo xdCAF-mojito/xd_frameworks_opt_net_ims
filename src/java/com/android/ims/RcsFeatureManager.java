@@ -27,15 +27,15 @@ import android.telephony.CarrierConfigManager;
 import android.telephony.SubscriptionManager;
 import android.telephony.TelephonyFrameworkInitializer;
 import android.telephony.ims.ImsException;
+import android.telephony.ims.ImsService;
 import android.telephony.ims.RcsContactUceCapability;
 import android.telephony.ims.RegistrationManager;
 import android.telephony.ims.aidl.IImsCapabilityCallback;
-import android.telephony.ims.aidl.IImsConfig;
 import android.telephony.ims.aidl.IImsRcsController;
 import android.telephony.ims.aidl.IImsRcsFeature;
-import android.telephony.ims.aidl.IImsRegistration;
 import android.telephony.ims.aidl.IImsRegistrationCallback;
 import android.telephony.ims.aidl.IRcsFeatureListener;
+import android.telephony.ims.aidl.ISipTransport;
 import android.telephony.ims.feature.CapabilityChangeRequest;
 import android.telephony.ims.feature.ImsFeature;
 import android.telephony.ims.feature.RcsFeature;
@@ -47,6 +47,7 @@ import android.telephony.ims.stub.RcsSipOptionsImplBase;
 import android.util.Log;
 
 import com.android.ims.internal.IImsServiceFeatureCallback;
+import com.android.ims.rcs.uce.RcsCapabilityExchangeImplAdapter.PublishResponseCallback;
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.telephony.ITelephony;
 import com.android.telephony.Rlog;
@@ -344,6 +345,25 @@ public class RcsFeatureManager implements FeatureUpdates {
             mRcsFeatureConnection.removeCallbackForSubscription(subId, callback);
     }
 
+    public boolean isImsServiceCapable(@ImsService.ImsServiceCapability long capabilities)
+            throws ImsException {
+        try {
+            return mRcsFeatureConnection.isCapable(capabilities);
+        } catch (RemoteException e) {
+            throw new ImsException(e.getMessage(), ImsException.CODE_ERROR_SERVICE_UNAVAILABLE);
+        }
+    }
+
+    /**
+     * @return The SipTransport interface if it exists or {@code null} if it does not exist due to
+     * the ImsService not supporting it.
+     */
+    public ISipTransport getSipTransport() throws ImsException {
+        if (!isImsServiceCapable(ImsService.CAPABILITY_SIP_DELEGATE_CREATION)) {
+            return null;
+        }
+        return mRcsFeatureConnection.getSipTransport();
+    }
     /**
      * Query for the specific capability.
      */
@@ -428,6 +448,11 @@ public class RcsFeatureManager implements FeatureUpdates {
     public void requestPublication(RcsContactUceCapability capabilities, int taskId)
             throws RemoteException {
         mRcsFeatureConnection.requestPublication(capabilities, taskId);
+    }
+
+    public void requestPublication(String pidfXml, PublishResponseCallback responseCallback)
+            throws RemoteException {
+        mRcsFeatureConnection.requestPublication(pidfXml, responseCallback);
     }
 
     public void requestCapabilities(List<Uri> uris, int taskId) throws RemoteException {
@@ -563,9 +588,10 @@ public class RcsFeatureManager implements FeatureUpdates {
     }
 
     @Override
-    public void associate(IBinder b, IImsConfig c, IImsRegistration r) {
-        IImsRcsFeature f = IImsRcsFeature.Stub.asInterface(b);
-        mRcsFeatureConnection = new RcsFeatureConnection(mContext, mSlotId, f, c, r);
+    public void associate(ImsFeatureContainer c) {
+        IImsRcsFeature f = IImsRcsFeature.Stub.asInterface(c.imsFeature);
+        mRcsFeatureConnection = new RcsFeatureConnection(mContext, mSlotId, f, c.imsConfig,
+                c.imsRegistration, c.sipTransport);
     }
 
     @Override
