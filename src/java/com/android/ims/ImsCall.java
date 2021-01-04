@@ -16,9 +16,11 @@
 
 package com.android.ims;
 
+import android.annotation.NonNull;
 import android.compat.annotation.UnsupportedAppUsage;
 import android.content.Context;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Message;
 import android.os.Parcel;
@@ -34,6 +36,7 @@ import android.telephony.ims.ImsConferenceState;
 import android.telephony.ims.ImsReasonInfo;
 import android.telephony.ims.ImsStreamMediaProfile;
 import android.telephony.ims.ImsSuppServiceNotification;
+import android.telephony.ims.RtpHeaderExtension;
 import android.text.TextUtils;
 import android.util.Log;
 
@@ -46,9 +49,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
-import java.util.Map;
 import java.util.Map.Entry;
-import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -501,12 +502,29 @@ public class ImsCall implements ICall {
         }
 
         /**
+         * Reports a DTMF tone received from the network.
+         * @param imsCall The IMS call the tone was received from.
+         * @param digit The digit received.
+         */
+        public void onCallSessionDtmfReceived(ImsCall imsCall, char digit) {
+        }
+
+        /**
          * Called when the call quality has changed.
          *
          * @param imsCall ImsCall object
          * @param callQuality the updated CallQuality
          */
         public void onCallQualityChanged(ImsCall imsCall, CallQuality callQuality) {
+        }
+
+        /**
+         * Called when RTP header extension data is received from the network.
+         * @param imsCall The ImsCall the data was received on.
+         * @param rtpHeaderExtensionData The RTP extension data received.
+         */
+        public void onCallSessionRtpHeaderExtensionsReceived(ImsCall imsCall,
+                @NonNull Set<RtpHeaderExtension> rtpHeaderExtensionData) {
         }
     }
 
@@ -952,7 +970,7 @@ public class ImsCall implements ICall {
      *
      * @return {@code True} if the call is a multiparty call.
      */
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public boolean isMultiparty() {
         synchronized(mLockObj) {
             if (mSession == null) {
@@ -1217,7 +1235,7 @@ public class ImsCall implements ICall {
      * @param number number to be deflected to.
      * @throws ImsException if the IMS service fails to deflect the call
      */
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public void deflect(String number) throws ImsException {
         logi("deflect :: session=" + mSession + ", number=" + Rlog.pii(TAG, number));
 
@@ -1243,7 +1261,7 @@ public class ImsCall implements ICall {
      * @see Listener#onCallStartFailed
      * @throws ImsException if the IMS service fails to reject the call
      */
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public void reject(int reason) throws ImsException {
         logi("reject :: reason=" + reason);
 
@@ -1328,7 +1346,7 @@ public class ImsCall implements ICall {
      *
      * @param reason reason code to terminate a call
      */
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
     public void terminate(int reason) {
         logi("terminate :: reason=" + reason);
 
@@ -1806,6 +1824,30 @@ public class ImsCall implements ICall {
         }
     }
 
+    /**
+     * Requests that RTP header extensions are added to the next RTP packet sent by the IMS stack.
+     * <p>
+     * The {@link RtpHeaderExtension#getLocalIdentifier()} local identifiers specified here must match
+     * agreed upon identifiers as indicated in
+     * {@link ImsCallProfile#getAcceptedRtpHeaderExtensionTypes()} for the current
+     * {@link #getCallProfile()}.
+     * <p>
+     * By specification, the RTP header extension is an unacknowledged transmission and there is no
+     * guarantee that the header extension will be delivered by the network to the other end of the
+     * call.
+     * @param rtpHeaderExtensions The RTP header extension(s) to be included in the next RTP
+     *                            packet.
+     */
+    public void sendRtpHeaderExtensions(@NonNull Set<RtpHeaderExtension> rtpHeaderExtensions) {
+        logi("sendRtpHeaderExtensions; extensionsSent=" + rtpHeaderExtensions.size());
+        synchronized(mLockObj) {
+            if (mSession == null) {
+                loge("sendRtpHeaderExtensions::no session");
+            }
+            mSession.sendRtpHeaderExtensions(rtpHeaderExtensions);
+        }
+    }
+
     public void setAnswerWithRtt() {
         mAnswerWithRtt = true;
     }
@@ -1963,7 +2005,7 @@ public class ImsCall implements ICall {
                         ", status=" + status +
                         ", user=" + Rlog.pii(TAG, user) +
                         ", displayName= " + Rlog.pii(TAG, displayName) +
-                        ", endpoint=" + endpoint);
+                        ", endpoint=" + Rlog.pii(TAG, endpoint));
             }
 
             Uri handle = Uri.parse(user);
@@ -2173,10 +2215,6 @@ public class ImsCall implements ICall {
                 // it and figure out where we need to set it for the final conference configuration.
                 ImsCallSession transientConferenceSession = mTransientConferenceSession;
                 mTransientConferenceSession = null;
-
-                // Clear the listener for this transient session, we'll create a new listener
-                // when it is attached to the final ImsCall that it should live on.
-                transientConferenceSession.setListener(null);
 
                 // Determine which call the transient session should be moved to.  If the current
                 // call session is still alive and the merge peer's session is not, we have a
@@ -2440,8 +2478,14 @@ public class ImsCall implements ICall {
 
             ImsCall.Listener listener;
 
+            ImsCallProfile updatedProfile = session.getCallProfile();
             synchronized(ImsCall.this) {
                 listener = mListener;
+                // The ImsCallProfile may have updated here (for example call state change). Query
+                // the potentially updated call profile to pick up these changes.
+                setCallProfile(updatedProfile);
+                // Apply the new mediaProfile on top of the Call Profile so it is not ignored in
+                // case the ImsService has not had a chance to update it yet.
                 mCallProfile.mMediaProfile.copyFrom(profile);
             }
 
@@ -3380,6 +3424,23 @@ public class ImsCall implements ICall {
         }
 
         @Override
+        public void callSessionDtmfReceived(char digit) {
+            ImsCall.Listener listener;
+
+            synchronized(ImsCall.this) {
+                listener = mListener;
+            }
+
+            if (listener != null) {
+                try {
+                    listener.onCallSessionDtmfReceived(ImsCall.this, digit);
+                } catch (Throwable t) {
+                    loge("callSessionDtmfReceived:: ", t);
+                }
+            }
+        }
+
+        @Override
         public void callQualityChanged(CallQuality callQuality) {
             ImsCall.Listener listener;
 
@@ -3392,6 +3453,24 @@ public class ImsCall implements ICall {
                     listener.onCallQualityChanged(ImsCall.this, callQuality);
                 } catch (Throwable t) {
                     loge("callQualityChanged:: ", t);
+                }
+            }
+        }
+
+        @Override
+        public void callSessionRtpHeaderExtensionsReceived(
+                @NonNull Set<RtpHeaderExtension> extensions) {
+            ImsCall.Listener listener;
+
+            synchronized (ImsCall.this) {
+                listener = mListener;
+            }
+
+            if (listener != null) {
+                try {
+                    listener.onCallSessionRtpHeaderExtensionsReceived(ImsCall.this, extensions);
+                } catch (Throwable t) {
+                    loge("callSessionRtpHeaderExtensionsReceived:: ", t);
                 }
             }
         }
