@@ -2234,6 +2234,9 @@ public class ImsManager implements FeatureUpdates {
             Settings.Secure.putInt(mContext.getContentResolver(),
                     Settings.Secure.RTT_CALLING_MODE + convertRttPhoneId(mPhoneId),
                     defaultRttMode);
+            Settings.Global.putInt(mContext.getContentResolver(),
+                    "qti.settings.rtt_operation" + convertRttPhoneId(mPhoneId),
+                    1 /* RTT_AUTOMATIC_MODE */);
         }
         boolean isRttUiSettingEnabled = Settings.Secure.getInt(mContext.getContentResolver(),
                 Settings.Secure.RTT_CALLING_MODE + convertRttPhoneId(mPhoneId), 0) != 0;
