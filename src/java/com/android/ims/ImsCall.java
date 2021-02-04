@@ -1963,7 +1963,7 @@ public class ImsCall implements ICall {
                         ", status=" + status +
                         ", user=" + Rlog.pii(TAG, user) +
                         ", displayName= " + Rlog.pii(TAG, displayName) +
-                        ", endpoint=" + endpoint);
+                        ", endpoint=" + Rlog.pii(TAG, endpoint));
             }
 
             Uri handle = Uri.parse(user);
@@ -2436,8 +2436,14 @@ public class ImsCall implements ICall {
 
             ImsCall.Listener listener;
 
+            ImsCallProfile updatedProfile = session.getCallProfile();
             synchronized(ImsCall.this) {
                 listener = mListener;
+                // The ImsCallProfile may have updated here (for example call state change). Query
+                // the potentially updated call profile to pick up these changes.
+                setCallProfile(updatedProfile);
+                // Apply the new mediaProfile on top of the Call Profile so it is not ignored in
+                // case the ImsService has not had a chance to update it yet.
                 mCallProfile.mMediaProfile.copyFrom(profile);
             }
 
