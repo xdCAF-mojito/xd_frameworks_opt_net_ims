@@ -2444,25 +2444,6 @@ public class ImsCall implements ICall {
         return;
     }
 
-    /**
-     * Sends RTT Upgrade request
-     *
-     * @param to   : expected profile
-     * @throws CallStateException
-     */
-    public void sendRttModifyRequest(ImsCallProfile to) throws ImsException {
-        logi("RTT: sendRttModifyRequest");
-
-        synchronized(mLockObj) {
-            if (mSession == null) {
-                loge("RTT: sendRttModifyRequest :: no call session");
-                throw new ImsException("No call session",
-                        ImsReasonInfo.CODE_LOCAL_CALL_TERMINATED);
-            }
-            mSession.sendRttModifyRequest(to);
-        }
-    }
-
     @VisibleForTesting
     public class ImsCallSessionListenerProxy extends ImsCallSession.Listener {
         @Override

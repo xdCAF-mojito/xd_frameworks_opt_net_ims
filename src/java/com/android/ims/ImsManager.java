@@ -50,6 +50,7 @@ import android.telephony.ims.aidl.IImsMmTelFeature;
 import android.telephony.ims.aidl.IImsRegistration;
 import android.telephony.ims.aidl.IImsRegistrationCallback;
 import android.telephony.ims.aidl.IImsSmsListener;
+import android.telephony.ims.aidl.IRcsConfigCallback;
 import android.telephony.ims.aidl.ISipTransport;
 import android.telephony.ims.feature.CapabilityChangeRequest;
 import android.telephony.ims.feature.ImsFeature;
@@ -865,6 +866,14 @@ public class ImsManager implements FeatureUpdates {
     }
 
     /**
+     * Returns whether the user sets call composer setting per sub.
+     */
+    public boolean isCallComposerEnabledByUser() {
+        return new TelephonyManager(mContext, getSubId()).getCallComposerStatus() ==
+                TelephonyManager.CALL_COMPOSER_STATUS_ON;
+    }
+
+    /**
      * Change persistent VT enabled setting
      *
      * @deprecated Does not support MSIM devices. Please use {@link #setVtSetting(boolean)} instead.
@@ -1470,6 +1479,7 @@ public class ImsManager implements FeatureUpdates {
             updateVolteFeatureValue(request);
             updateWfcFeatureAndProvisionedValues(request);
             updateVideoCallFeatureValue(request);
+            updateCallComposerFeatureValue(request);
             // Only turn on IMS for RTT if there's an active subscription present. If not, the
             // modem will be in emergency-call-only mode and will use separate signaling to
             // establish an RTT emergency call.
@@ -1644,6 +1654,31 @@ public class ImsManager implements FeatureUpdates {
             request.addCapabilitiesToDisableForTech(
                     MmTelFeature.MmTelCapabilities.CAPABILITY_TYPE_UT,
                     ImsRegistrationImplBase.REGISTRATION_TECH_LTE);
+        }
+    }
+
+    /**
+     * Update call composer capability
+     */
+    private void updateCallComposerFeatureValue(CapabilityChangeRequest request) {
+        boolean isUserSetEnabled = isCallComposerEnabledByUser();
+        boolean isCarrierConfigEnabled = getBooleanCarrierConfig(
+                CarrierConfigManager.KEY_SUPPORTS_CALL_COMPOSER_BOOL);
+
+        boolean isFeatureOn = isUserSetEnabled && isCarrierConfigEnabled;
+
+        log("updateCallComposerFeatureValue: isUserSetEnabled = " + isUserSetEnabled
+                + ", isCarrierConfigEnabled = " + isCarrierConfigEnabled
+                        + ", isFeatureOn = " + isFeatureOn);
+
+        if (isFeatureOn) {
+            request.addCapabilitiesToEnableForTech(
+                    MmTelFeature.MmTelCapabilities.CAPABILITY_TYPE_CALL_COMPOSER,
+                            ImsRegistrationImplBase.REGISTRATION_TECH_LTE);
+        } else {
+            request.addCapabilitiesToDisableForTech(
+                    MmTelFeature.MmTelCapabilities.CAPABILITY_TYPE_CALL_COMPOSER,
+                            ImsRegistrationImplBase.REGISTRATION_TECH_LTE);
         }
     }
 
@@ -2199,6 +2234,9 @@ public class ImsManager implements FeatureUpdates {
             Settings.Secure.putInt(mContext.getContentResolver(),
                     Settings.Secure.RTT_CALLING_MODE + convertRttPhoneId(mPhoneId),
                     defaultRttMode);
+            Settings.Global.putInt(mContext.getContentResolver(),
+                    "qti.settings.rtt_operation" + convertRttPhoneId(mPhoneId),
+                    1 /* RTT_AUTOMATIC_MODE */);
         }
         boolean isRttUiSettingEnabled = Settings.Secure.getInt(mContext.getContentResolver(),
                 Settings.Secure.RTT_CALLING_MODE + convertRttPhoneId(mPhoneId), 0) != 0;
@@ -2846,6 +2884,47 @@ public class ImsManager implements FeatureUpdates {
                 ProvisioningManager.PROVISIONING_VALUE_DISABLED;
         setProvisionedBoolNoException(ImsConfig.ConfigConstants.EAB_SETTING_ENABLED,
                 provisionStatus);
+    }
+
+    /**
+     * Adds a callback of RCS provisioning for a specified subscription.
+     * @param callback A {@link android.telephony.ims.aidl.IRcsConfigCallback}
+     *         for RCS provisioning change.
+     * @param subId The subscription that is associated with the callback.
+     * @throws IllegalStateException when the {@link ImsService} connection is not available.
+     * @throws IllegalArgumentException when the {@link IRcsConfigCallback} argument is null.
+     */
+    public void addRcsProvisioningCallbackForSubscription(IRcsConfigCallback callback, int subId) {
+        if (callback == null) {
+            throw new IllegalArgumentException("provisioning callback can't be null");
+        }
+
+        mMmTelConnectionRef.get().addRcsProvisioningCallbackForSubscription(callback, subId);
+        log("Capability Callback registered for subscription.");
+    }
+
+    /**
+     * Removes a previously registered {@link android.telephony.ims.aidl.IRcsConfigCallback}.
+     * @throws IllegalStateException when the {@link ImsService} connection is not available.
+     * @throws IllegalArgumentException when the {@link IRcsConfigCallback} argument is null.
+     */
+    public void removeRcsProvisioningCallbackForSubscription(
+            IRcsConfigCallback callback, int subId) {
+        if (callback == null) {
+            throw new IllegalArgumentException("provisioning callback can't be null");
+        }
+
+        mMmTelConnectionRef.get().removeRcsProvisioningCallbackForSubscription(callback, subId);
+    }
+
+    /**
+     * Removes all RCS provisioning callbacks
+     *
+     * <p>This method is called when default message application change or some other event
+     * which need force to remove all RCS provisioning callbacks.
+     */
+    public void clearRcsProvisioningCallbacks() {
+        mMmTelConnectionRef.get().clearRcsProvisioningCallbacks();
     }
 
     private boolean isDataEnabled() {
