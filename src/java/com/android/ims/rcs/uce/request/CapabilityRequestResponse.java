@@ -27,11 +27,13 @@ import android.util.Log;
 
 import com.android.ims.rcs.uce.presence.pidfparser.PidfParserUtils;
 import com.android.ims.rcs.uce.util.NetworkSipCode;
+import com.android.ims.rcs.uce.util.UceUtils;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 /**
@@ -39,36 +41,52 @@ import java.util.stream.Collectors;
  */
 public class CapabilityRequestResponse {
 
-    private static final String LOG_TAG = "CapRequestResponse";
+    private static final String LOG_TAG = UceUtils.getLogPrefix() + "CapRequestResponse";
 
-    // The command error code of the request.
-    private @CommandCode Integer mCommandError;
+    // The command error code of the request. It is assigned by the callback "onCommandError"
+    private @CommandCode Optional<Integer> mCommandError;
 
-    // The SIP code of the network response.
-    private int mNetworkResponseCode;
+    // The SIP code of the network response. It is assigned by the callback "onNetworkResponse"
+    private Optional<Integer> mNetworkRespSipCode;
 
-    // The reason of the network response.
-    private String mNetworkResponseReason;
+    // The reason of the network response. It is assigned by the callback "onNetworkResponse"
+    private Optional<String> mReasonPhrase;
 
-    // The reason why the this request was terminated.
-    private String mTerminatedReason;
+    // The response sip code from the reason header
+    private Optional<Integer> mReasonHeaderCause;
 
-    // How long after this request can be retried.
-    private long mRetryAfterMillis = 0L;
+    // The phrase from the reason header
+    private Optional<String> mReasonHeaderText;
+
+    // The reason why the this request was terminated. This value is assigned by the callback
+    // "onTerminated"
+    private Optional<String> mTerminatedReason;
+
+    // How long after this request can be retried. This value is assigned by the callback
+    // "onTerminated"
+    private Optional<Long> mRetryAfterMillis;
 
     // The error code of this request.
-    private @RcsUceAdapter.ErrorCode Integer mErrorCode;
+    private @RcsUceAdapter.ErrorCode Optional<Integer> mErrorCode;
 
-    // The list of the updated capabilities from the network.
-    private final List<RcsContactUceCapability> mUpdatedCapabilityList;
-
-    // The list of the terminated resource
+    // The list of the terminated resource. This is assigned by the callback "onResourceTerminated"
     private final List<RcsContactUceCapability> mTerminatedResource;
+
+    // The list of the updated capabilities. This is assigned by the callback
+    // "onNotifyCapabilitiesUpdate"
+    private final List<RcsContactUceCapability> mUpdatedCapabilityList;
 
     // The callback to notify the result of this request.
     public IRcsUceControllerCallback mCapabilitiesCallback;
 
     public CapabilityRequestResponse() {
+        mCommandError = Optional.empty();
+        mNetworkRespSipCode = Optional.empty();
+        mReasonPhrase = Optional.empty();
+        mReasonHeaderCause = Optional.empty();
+        mReasonHeaderText = Optional.empty();
+        mTerminatedReason = Optional.empty();
+        mRetryAfterMillis = Optional.of(0L);
         mTerminatedResource = new ArrayList<>();
         mUpdatedCapabilityList = new ArrayList<>();
     }
@@ -84,21 +102,13 @@ public class CapabilityRequestResponse {
      * Set the error code when the request is failed.
      */
     public void setErrorCode(@RcsUceAdapter.ErrorCode int errorCode) {
-        mErrorCode = errorCode;
-    }
-
-    /**
-     * Set the error code and retryAfter when the request is failed.
-     */
-    public void setErrorCode(@RcsUceAdapter.ErrorCode int errorCode, long retryAfterMillis) {
-        mErrorCode = errorCode;
-        mRetryAfterMillis = retryAfterMillis;
+        mErrorCode = Optional.of(errorCode);
     }
 
     /**
      * Get the error code of this request.
      */
-    public int getErrorCode() {
+    public Optional<Integer> getErrorCode() {
         return mErrorCode;
     }
 
@@ -106,37 +116,85 @@ public class CapabilityRequestResponse {
      * Set the command error code.
      */
     public void setCommandError(@CommandCode int commandError) {
-        mCommandError = commandError;
+        mCommandError = Optional.of(commandError);
     }
 
     /**
      * Set the network response of this request which is sent by the network.
      */
     public void setNetworkResponseCode(int sipCode, String reason) {
-        mNetworkResponseCode = sipCode;
-        mNetworkResponseReason = reason;
+        mNetworkRespSipCode = Optional.of(sipCode);
+        mReasonPhrase = Optional.ofNullable(reason);
+    }
+
+    /**
+     * Set the network response of this request which is sent by the network.
+     */
+    public void setNetworkResponseCode(int sipCode, String reasonPhrase,
+            int reasonHeaderCause, String reasonHeaderText) {
+        mNetworkRespSipCode = Optional.of(sipCode);
+        mReasonPhrase = Optional.ofNullable(reasonPhrase);
+        mReasonHeaderCause = Optional.of(reasonHeaderCause);
+        mReasonHeaderText = Optional.ofNullable(reasonHeaderText);
     }
 
     /**
      * Get the sip code of the network response.
      */
-    public int getNetworkResponseCode() {
-        return mNetworkResponseCode;
+    public Optional<Integer> getNetworkRespSipCode() {
+        return mNetworkRespSipCode;
     }
 
     /**
      * Get the reason of the network response.
      */
-    public String getNetworkResponseReason() {
-        return mNetworkResponseReason;
+    public Optional<String> getReasonPhrase() {
+        return mReasonPhrase;
     }
 
     /**
-     * Check if the network response is success.
-     * @return true if the network response code is OK.
+     * Get the response sip code from the reason header.
+     */
+    public Optional<Integer> getReasonHeaderCause() {
+        return mReasonHeaderCause;
+    }
+
+    /**
+     * Get the response phrae from the reason header.
+     */
+    public Optional<String> getReasonHeaderText() {
+        return mReasonHeaderText;
+    }
+
+    /**
+     * Check if the network response is OK.
+     * @return true if the network response code is OK and the Reason header cause
+     * is either not present or OK.
      */
     public boolean isNetworkResponseOK() {
-        return (mNetworkResponseCode == NetworkSipCode.SIP_CODE_OK) ? true : false;
+        final int sipCodeOk = NetworkSipCode.SIP_CODE_OK;
+        if (getNetworkRespSipCode().filter(c -> c == sipCodeOk).isPresent() &&
+                (!getReasonHeaderCause().isPresent()
+                        || getReasonHeaderCause().filter(c -> c == sipCodeOk).isPresent())) {
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Check if the request is forbidden.
+     * @return true if the Reason header sip code is 403(Forbidden) or the response sip code is 403.
+     */
+    public boolean isRequestForbidden() {
+        // Check the Reason header sip code if the Reason header is present, otherwise check the
+        // response sip code.
+        if (getReasonHeaderCause().isPresent()) {
+            return getReasonHeaderCause()
+                    .filter(c -> c == NetworkSipCode.SIP_CODE_FORBIDDEN).isPresent();
+        } else {
+            return getNetworkRespSipCode()
+            .filter(c -> c == NetworkSipCode.SIP_CODE_FORBIDDEN).isPresent();
+        }
     }
 
     /**
@@ -145,15 +203,15 @@ public class CapabilityRequestResponse {
      * @param retryAfterMillis How long to wait before retry this request.
      */
     public void setRequestTerminated(String reason, long retryAfterMillis) {
-        mTerminatedReason = reason;
-        mRetryAfterMillis = retryAfterMillis;
+        mTerminatedReason = Optional.ofNullable(reason);
+        mRetryAfterMillis = Optional.of(retryAfterMillis);
     }
 
     /**
-     * Retrieve the retryAfterMillis
+     * @return Return the retryAfterMillis, 0L if the value is not present.
      */
     public long getRetryAfterMillis() {
-        return mRetryAfterMillis;
+        return mRetryAfterMillis.orElse(0L);
     }
 
     /**
@@ -174,8 +232,10 @@ public class CapabilityRequestResponse {
         }
     }
 
-    // Remove the given capabilities from the UpdatedCapabilityList when these capabilities have
-    // updated to the requester.
+    /**
+     * Remove the given capabilities from the UpdatedCapabilityList when these capabilities have
+     * updated to the requester.
+     */
     private void removeCapabilities(List<RcsContactUceCapability> capabilityList) {
         synchronized (mUpdatedCapabilityList) {
             mUpdatedCapabilityList.removeAll(capabilityList);
@@ -219,6 +279,13 @@ public class CapabilityRequestResponse {
      */
     public boolean triggerCachedCapabilitiesCallback(
             List<RcsContactUceCapability> cachedCapabilities) {
+        // Return if there's no cached capabilities.
+        if (cachedCapabilities == null || cachedCapabilities.isEmpty()) {
+            return true;
+        }
+
+        Log.d(LOG_TAG, "triggerCachedCapabilitiesCallback: size=" + cachedCapabilities.size());
+
         try {
             mCapabilitiesCallback.onCapabilitiesReceived(
                     Collections.unmodifiableList(cachedCapabilities));
@@ -265,7 +332,7 @@ public class CapabilityRequestResponse {
     }
 
     /**
-     * Trigger the onComplete callback to notify the request is success.
+     * Trigger the onComplete callback to notify the request is completed.
      */
     public void triggerCompletedCallback() {
         try {
@@ -280,7 +347,7 @@ public class CapabilityRequestResponse {
      */
     public void triggerErrorCallback() {
         try {
-            mCapabilitiesCallback.onError(mErrorCode, mRetryAfterMillis);
+            mCapabilitiesCallback.onError(mErrorCode.get(), mRetryAfterMillis.orElse(0L));
         } catch (RemoteException e) {
             Log.w(LOG_TAG, "triggerErrorCallback exception: " + e);
         }
@@ -299,9 +366,11 @@ public class CapabilityRequestResponse {
             case RcsCapabilityExchangeImplBase.COMMAND_CODE_INVALID_PARAM:
             case RcsCapabilityExchangeImplBase.COMMAND_CODE_FETCH_ERROR:
             case RcsCapabilityExchangeImplBase.COMMAND_CODE_NOT_SUPPORTED:
-            case RcsCapabilityExchangeImplBase.COMMAND_CODE_NOT_FOUND:
             case RcsCapabilityExchangeImplBase.COMMAND_CODE_NO_CHANGE:
                 uceError = RcsUceAdapter.ERROR_GENERIC_FAILURE;
+                break;
+            case RcsCapabilityExchangeImplBase.COMMAND_CODE_NOT_FOUND:
+                uceError = RcsUceAdapter.ERROR_NOT_FOUND;
                 break;
             case RcsCapabilityExchangeImplBase.COMMAND_CODE_REQUEST_TIMEOUT:
                 uceError = RcsUceAdapter.ERROR_REQUEST_TIMEOUT;
@@ -325,15 +394,25 @@ public class CapabilityRequestResponse {
     /**
      * Convert the SIP error code which sent by ImsService to the capability error code.
      */
-    public static int convertSipErrorToCapabilityError(int sipError, String sipReason) {
+    public int getCapabilityErrorFromSipError() {
+        int sipError;
+        String respReason;
+        // Check the sip code in the Reason header first if the Reason Header is present.
+        if (mReasonHeaderCause.isPresent()) {
+            sipError = mReasonHeaderCause.get();
+            respReason = mReasonHeaderText.orElse("");
+        } else {
+            sipError = mNetworkRespSipCode.orElse(-1);
+            respReason = mReasonPhrase.orElse("");
+        }
         int uceError;
         switch (sipError) {
             case NetworkSipCode.SIP_CODE_FORBIDDEN:   // 403
-                if (NetworkSipCode.SIP_NOT_REGISTERED.equalsIgnoreCase(sipReason)) {
+                if (NetworkSipCode.SIP_NOT_REGISTERED.equalsIgnoreCase(respReason)) {
                     // Not registered with IMS. Device shall register to IMS.
                     uceError = RcsUceAdapter.ERROR_NOT_REGISTERED;
                 } else if (NetworkSipCode.SIP_NOT_AUTHORIZED_FOR_PRESENCE.equalsIgnoreCase(
-                        sipReason)) {
+                        respReason)) {
                     // Not provisioned for EAB. Device shall not retry.
                     uceError = RcsUceAdapter.ERROR_NOT_AUTHORIZED;
                 } else {
@@ -341,9 +420,12 @@ public class CapabilityRequestResponse {
                     uceError = RcsUceAdapter.ERROR_FORBIDDEN;
                 }
                 break;
+            case NetworkSipCode.SIP_CODE_REQUEST_TIMEOUT:        // 408
+                uceError = RcsUceAdapter.ERROR_REQUEST_TIMEOUT;
+                break;
             case NetworkSipCode.SIP_CODE_INTERVAL_TOO_BRIEF:     // 423
                 // Rejected by the network because the requested expiry interval is too short.
-                uceError = RcsUceAdapter.ERROR_REQUEST_TIMEOUT;
+                uceError = RcsUceAdapter.ERROR_GENERIC_FAILURE;
                 break;
             case NetworkSipCode.SIP_CODE_SERVER_INTERNAL_ERROR:  // 500
             case NetworkSipCode.SIP_CODE_SERVICE_UNAVAILABLE:    // 503
@@ -360,12 +442,14 @@ public class CapabilityRequestResponse {
     @Override
     public String toString() {
         StringBuilder builder = new StringBuilder();
-        return builder.append("ErrorCode=").append(mErrorCode)
-                .append(", CommandErrorCode=").append(mCommandError)
-                .append(", NetworkResponseCode=").append(mNetworkResponseCode)
-                .append(", NetworkResponseReason=").append(mNetworkResponseReason)
-                .append(", RetryAfter=").append(mRetryAfterMillis)
-                .append(", TerminatedReason=").append(mTerminatedReason)
+        return builder.append("ErrorCode=").append(mErrorCode.orElse(-1))
+                .append(", CommandErrorCode=").append(mCommandError.orElse(-1))
+                .append(", NetworkResponseCode=").append(mNetworkRespSipCode.orElse(-1))
+                .append(", NetworkResponseReason=").append(mReasonPhrase.orElse(""))
+                .append(", ReasonHeaderCause=").append(mReasonHeaderCause.orElse(-1))
+                .append(", ReasonHeaderText=").append(mReasonHeaderText.orElse(""))
+                .append(", TerminatedReason=").append(mTerminatedReason.orElse(""))
+                .append(", RetryAfterMillis=").append(mRetryAfterMillis.orElse(0L))
                 .toString();
     }
 }

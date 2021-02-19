@@ -35,13 +35,12 @@ import java.util.Objects;
 import java.util.stream.Collectors;
 
 /**
- * The UceRequest to request the capabilities via SubscribeController.
+ * The UceRequest to request the capabilities when the presence mechanism is supported by the
+ * network.
  */
 public class SubscribeRequest extends UceRequest {
 
-    private SubscribeController mSubscribeController;
-
-    // The result callback of the subscribe request from IMS service.
+    // The result callback of the capabilities request from IMS service.
     private ISubscribeResponseCallback mResponseCallback =
             new ISubscribeResponseCallback.Stub() {
                 @Override
@@ -51,6 +50,12 @@ public class SubscribeRequest extends UceRequest {
                 @Override
                 public void onNetworkResponse(int code, String reason) {
                     SubscribeRequest.this.onNetworkResponse(code, reason);
+                }
+                @Override
+                public void onNetworkRespHeader(int code, String reasonPhrase,
+                        int reasonHeaderCause, String reasonHeaderText) {
+                    SubscribeRequest.this.onNetworkResponse(code, reasonPhrase, reasonHeaderCause,
+                            reasonHeaderText);
                 }
                 @Override
                 public void onNotifyCapabilitiesUpdate(List<String> pidfXmls) {
@@ -65,6 +70,8 @@ public class SubscribeRequest extends UceRequest {
                     SubscribeRequest.this.onTerminated(reason, retryAfterMillis);
                 }
             };
+
+    private SubscribeController mSubscribeController;
 
     public SubscribeRequest(int subId, @UceRequestType int requestType,
             RequestManagerCallback taskMgrCallback, SubscribeController subscribeController) {
@@ -90,7 +97,6 @@ public class SubscribeRequest extends UceRequest {
     }
 
     @Override
-    @VisibleForTesting
     public void requestCapabilities(@NonNull List<Uri> requestCapUris) {
         SubscribeController subscribeController = mSubscribeController;
         if (subscribeController == null) {
@@ -102,7 +108,7 @@ public class SubscribeRequest extends UceRequest {
 
         // TODO: Check if the network supports group subscribe or a bunch of individual subscribe.
 
-        logi("requestCapabilities: " + requestCapUris.size());
+        logi("requestCapabilities: size=" + requestCapUris.size());
         try {
             subscribeController.requestCapabilities(requestCapUris, mResponseCallback);
         } catch (RemoteException e) {
@@ -119,7 +125,7 @@ public class SubscribeRequest extends UceRequest {
 
     // Handle the command error which is triggered by ISubscribeResponseCallback.
     private void onCommandError(@CommandCode int cmdError) {
-        logd("onCommandError: " + cmdError);
+        logd("onCommandError: error code=" + cmdError);
         if (mIsFinished) {
             return;
         }
@@ -130,9 +136,9 @@ public class SubscribeRequest extends UceRequest {
         mRequestManagerCallback.onRequestFailed(mTaskId);
     }
 
-    // Handle the NetworkResponse callback which is triggered by ISubscribeResponseCallback.
+    // Handle the network response callback which is triggered by ISubscribeResponseCallback.
     private void onNetworkResponse(int sipCode, String reason) {
-        logd("onNetworkResponse: " + sipCode + ", reason=" + reason);
+        logd("onNetworkResponse: code=" + sipCode + ", reason=" + reason);
         if (mIsFinished) {
             return;
         }
@@ -141,8 +147,28 @@ public class SubscribeRequest extends UceRequest {
         // Set the capability error code and notify RequestManager if the SIP code is not success.
         // Otherwise, waiting for the onNotifyCapabilitiesUpdate callback.
         if (!mRequestResponse.isNetworkResponseOK()) {
-            int capErrorCode = CapabilityRequestResponse.convertSipErrorToCapabilityError(
-                    sipCode, reason);
+            int capErrorCode = mRequestResponse.getCapabilityErrorFromSipError();
+            mRequestResponse.setErrorCode(capErrorCode);
+            mRequestManagerCallback.onRequestFailed(mTaskId);
+        }
+    }
+
+    // Handle the network response callback which is triggered by ISubscribeResponseCallback.
+    private void onNetworkResponse(int sipCode, String reasonPhrase,
+        int reasonHeaderCause, String reasonHeaderText) {
+        logd("onNetworkResponse: code=" + sipCode + ", reasonPhrase=" + reasonPhrase +
+                ", reasonHeaderCause=" + reasonHeaderCause +
+                ", reasonHeaderText=" + reasonHeaderText);
+        if (mIsFinished) {
+            return;
+        }
+        mRequestResponse.setNetworkResponseCode(sipCode, reasonPhrase, reasonHeaderCause,
+                reasonHeaderText);
+
+        // Set the capability error code and notify RequestManager if the SIP code is not success.
+        // Otherwise, waiting for the onNotifyCapabilitiesUpdate callback.
+        if (!mRequestResponse.isNetworkResponseOK()) {
+            int capErrorCode = mRequestResponse.getCapabilityErrorFromSipError();
             mRequestResponse.setErrorCode(capErrorCode);
             mRequestManagerCallback.onRequestFailed(mTaskId);
         }
@@ -186,7 +212,7 @@ public class SubscribeRequest extends UceRequest {
 
         // Convert from the pidf xml to the list of RcsContactUceCapability
         List<RcsContactUceCapability> capabilityList = pidfXml.stream()
-                .map(pidf -> PidfParser.convertToRcsContactUceCapability(pidf))
+                .map(pidf -> PidfParser.getRcsContactUceCapability(pidf))
                 .filter(Objects::nonNull)
                 .collect(Collectors.toList());
 
@@ -213,10 +239,7 @@ public class SubscribeRequest extends UceRequest {
         } else {
             // This request is failed. Store the retryAfter info and notify UceRequestManager.
             mRequestResponse.setRequestTerminated(reason, retryAfterMillis);
-            int networkCode = mRequestResponse.getNetworkResponseCode();
-            String networkReason = mRequestResponse.getNetworkResponseReason();
-            int capErrorCode = CapabilityRequestResponse.convertSipErrorToCapabilityError(
-                    networkCode, networkReason);
+            int capErrorCode = mRequestResponse.getCapabilityErrorFromSipError();
             mRequestResponse.setErrorCode(capErrorCode);
             mRequestManagerCallback.onRequestFailed(mTaskId);
         }
