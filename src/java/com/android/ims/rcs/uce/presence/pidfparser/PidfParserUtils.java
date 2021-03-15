@@ -52,13 +52,13 @@ public class PidfParserUtils {
     private static String[] REQUEST_RESULT_REASON_NOT_FOUND = { "noresource", "rejected" };
 
     /**
-     * Convert the giving class RcsContactUceCapability to the class Presence.
+     * Convert the given class RcsContactUceCapability to the class Presence.
      */
     static Presence getPresence(RcsContactUceCapability capabilities) {
         // Create "presence" element which is the root element of the pidf
         Presence presence = new Presence(capabilities.getContactUri());
 
-        List<RcsContactPresenceTuple> tupleList = capabilities.getPresenceTuples();
+        List<RcsContactPresenceTuple> tupleList = capabilities.getCapabilityTuples();
         if (tupleList == null || tupleList.isEmpty()) {
             return presence;
         }
@@ -144,11 +144,13 @@ public class PidfParserUtils {
         }
 
         // Add the Service Description element into the tuple
-        if (serviceIdElement != null && versionElement != null && descriptionElement != null) {
+        if (serviceIdElement != null && versionElement != null) {
             ServiceDescription serviceDescription = new ServiceDescription();
             serviceDescription.setServiceId(serviceIdElement);
             serviceDescription.setVersion(versionElement);
-            serviceDescription.setDescription(descriptionElement);
+            if (descriptionElement != null) {
+                serviceDescription.setDescription(descriptionElement);
+            }
             tupleElement.setServiceDescription(serviceDescription);
         }
     }
@@ -186,7 +188,7 @@ public class PidfParserUtils {
     }
 
     /**
-     * Get the status from the giving tuple.
+     * Get the status from the given tuple.
      */
     public static String getTupleStatus(Tuple tuple) {
         if (tuple == null) {
@@ -203,7 +205,7 @@ public class PidfParserUtils {
     }
 
     /**
-     * Get the service Id from the giving tuple.
+     * Get the service Id from the given tuple.
      */
     public static String getTupleServiceId(Tuple tuple) {
         if (tuple == null) {
@@ -220,7 +222,7 @@ public class PidfParserUtils {
     }
 
     /**
-     * Get the service version from the giving tuple.
+     * Get the service version from the given tuple.
      */
     public static String getTupleServiceVersion(Tuple tuple) {
         if (tuple == null) {
@@ -237,7 +239,7 @@ public class PidfParserUtils {
     }
 
     /**
-     * Get the service description from the giving tuple.
+     * Get the service description from the given tuple.
      */
     public static String getTupleServiceDescription(Tuple tuple) {
         if (tuple == null) {
@@ -254,7 +256,7 @@ public class PidfParserUtils {
     }
 
     /**
-     * Get the contact from the giving tuple.
+     * Get the contact from the given tuple.
      */
     public static String getTupleContact(Tuple tuple) {
         if (tuple == null) {
@@ -268,7 +270,7 @@ public class PidfParserUtils {
     }
 
     /**
-     * Get the timestamp from the giving tuple.
+     * Get the timestamp from the given tuple.
      */
     public static String getTupleTimestamp(Tuple tuple) {
         if (tuple == null) {
