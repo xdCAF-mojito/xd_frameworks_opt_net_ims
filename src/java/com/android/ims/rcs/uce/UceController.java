@@ -16,6 +16,7 @@
 
 package com.android.ims.rcs.uce;
 
+import android.annotation.IntDef;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.content.Context;
@@ -48,12 +49,17 @@ import com.android.ims.rcs.uce.presence.subscribe.SubscribeControllerImpl;
 import com.android.ims.rcs.uce.request.UceRequestManager;
 import com.android.ims.rcs.uce.util.UceUtils;
 import com.android.internal.annotations.VisibleForTesting;
+import com.android.internal.os.SomeArgs;
 
 import java.io.PrintWriter;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.Optional;
+import java.util.Set;
 
 /**
  * The UceController will manage the RCS UCE requests on a per subscription basis. When it receives
@@ -116,17 +122,6 @@ public class UceController {
          */
         void refreshCapabilities(@NonNull List<Uri> contactNumbers,
                 @NonNull IRcsUceControllerCallback callback) throws RemoteException;
-
-        /**
-         * The method is called when the EabController and the PublishController want to receive
-         * published state changes.
-         */
-        void registerPublishStateCallback(@NonNull IRcsUcePublishStateCallback c);
-
-        /**
-         * Remove the existing PublishStateCallback.
-         */
-        void unregisterPublishStateCallback(@NonNull IRcsUcePublishStateCallback c);
     }
 
     /**
@@ -193,12 +188,94 @@ public class UceController {
         }
     };
 
+    /**
+     * Cache the capabilities events triggered by the ImsService during the RCS connected procedure.
+     */
+    private static class CachedCapabilityEvent {
+        private Optional<Integer> mRequestPublishCapabilitiesEvent;
+        private Optional<Boolean> mUnpublishEvent;
+        private Optional<SomeArgs> mRemoteCapabilityRequestEvent;
+
+        public CachedCapabilityEvent() {
+            mRequestPublishCapabilitiesEvent = Optional.empty();
+            mUnpublishEvent = Optional.empty();
+            mRemoteCapabilityRequestEvent = Optional.empty();
+        }
+
+        /**
+         * Cache the publish capabilities request event triggered by the ImsService.
+         */
+        public synchronized void setRequestPublishCapabilitiesEvent(int triggerType) {
+            mRequestPublishCapabilitiesEvent = Optional.of(triggerType);
+        }
+
+        /**
+         * Cache the unpublish event triggered by the ImsService.
+         */
+        public synchronized void setOnUnpublishEvent() {
+            mUnpublishEvent = Optional.of(Boolean.TRUE);
+        }
+
+        /**
+         * Cache the remote capability request event triggered by the ImsService.
+         */
+        public synchronized void setRemoteCapabilityRequestEvent(Uri contactUri,
+                List<String> remoteCapabilities, IOptionsRequestCallback callback) {
+            SomeArgs args = SomeArgs.obtain();
+            args.arg1 = contactUri;
+            args.arg2 = remoteCapabilities;
+            args.arg3 = callback;
+            mRemoteCapabilityRequestEvent = Optional.of(args);
+        }
+
+        /** @Return the cached publish request event */
+        public synchronized Optional<Integer> getRequestPublishEvent() {
+            return mRequestPublishCapabilitiesEvent;
+        }
+
+        /** @Return the cached unpublish event */
+        public synchronized Optional<Boolean> getUnpublishEvent() {
+            return mUnpublishEvent;
+        }
+
+        /** @Return the cached remote capability request event */
+        public synchronized Optional<SomeArgs> getRemoteCapabilityRequestEvent() {
+            return mRemoteCapabilityRequestEvent;
+        }
+
+        /** Clear the cached */
+        public synchronized void clear() {
+            mRequestPublishCapabilitiesEvent = Optional.empty();
+            mUnpublishEvent = Optional.empty();
+            mRemoteCapabilityRequestEvent.ifPresent(args -> args.recycle());
+            mRemoteCapabilityRequestEvent = Optional.empty();
+        }
+    }
+
+    /** The RCS state is disconnected */
+    private static final int RCS_STATE_DISCONNECTED = 0;
+
+    /** The RCS state is connecting */
+    private static final int RCS_STATE_CONNECTING = 1;
+
+    /** The RCS state is connected */
+    private static final int RCS_STATE_CONNECTED = 2;
+
+    @IntDef(value = {
+        RCS_STATE_DISCONNECTED,
+        RCS_STATE_CONNECTING,
+        RCS_STATE_CONNECTED,
+    }, prefix="RCS_STATE_")
+    @Retention(RetentionPolicy.SOURCE)
+    @interface RcsConnectedState {}
+
     private final int mSubId;
     private final Context mContext;
     private final LocalLog mLocalLog = new LocalLog(UceUtils.LOG_SIZE);
-    private volatile boolean mIsRcsConnected;
+
+    private volatile Looper mLooper;
     private volatile boolean mIsDestroyedFlag;
-    private Looper mLooper;
+    private volatile @RcsConnectedState int mRcsConnectedState;
 
     private RcsFeatureManager mRcsFeatureManager;
     private EabController mEabController;
@@ -210,10 +287,15 @@ public class UceController {
     // The server state for UCE requests.
     private final ServerState mServerState;
 
+    // The cache of the capability request event triggered by ImsService
+    private final CachedCapabilityEvent mCachedCapabilityEvent;
+
     public UceController(Context context, int subId) {
         mSubId = subId;
         mContext = context;
         mServerState = new ServerState();
+        mCachedCapabilityEvent = new CachedCapabilityEvent();
+        mRcsConnectedState = RCS_STATE_DISCONNECTED;
         logi("create");
 
         initLooper();
@@ -229,6 +311,8 @@ public class UceController {
         mServerState = serverState;
         mControllerFactory = controllerFactory;
         mRequestManagerFactory = requestManagerFactory;
+        mCachedCapabilityEvent = new CachedCapabilityEvent();
+        mRcsConnectedState = RCS_STATE_DISCONNECTED;
         initLooper();
         initControllers();
         initRequestManager();
@@ -262,15 +346,23 @@ public class UceController {
      */
     public void onRcsConnected(RcsFeatureManager manager) {
         logi("onRcsConnected");
-        mIsRcsConnected = true;
+        // Set the RCS is connecting flag
+        mRcsConnectedState = RCS_STATE_CONNECTING;
+
+        // Listen to the capability exchange event which is triggered by the ImsService
+        mRcsFeatureManager = manager;
+        mRcsFeatureManager.addCapabilityEventCallback(mCapabilityEventListener);
+
         // Notify each controllers that RCS is connected.
         mEabController.onRcsConnected(manager);
         mPublishController.onRcsConnected(manager);
         mSubscribeController.onRcsConnected(manager);
         mOptionsController.onRcsConnected(manager);
-        // Listen to the capability exchange event which is triggered by the ImsService
-        mRcsFeatureManager = manager;
-        mRcsFeatureManager.addCapabilityEventCallback(mCapabilityEventListener);
+
+        // Set the RCS is connected flag and check if there is any capability event received during
+        // the connecting process.
+        mRcsConnectedState = RCS_STATE_CONNECTED;
+        handleCachedCapabilityEvent();
     }
 
     /**
@@ -278,12 +370,14 @@ public class UceController {
      */
     public void onRcsDisconnected() {
         logi("onRcsDisconnected");
-        mIsRcsConnected = false;
+        mRcsConnectedState = RCS_STATE_DISCONNECTED;
         // Remove the listener because RCS is disconnected.
         if (mRcsFeatureManager != null) {
             mRcsFeatureManager.removeCapabilityEventCallback(mCapabilityEventListener);
             mRcsFeatureManager = null;
         }
+        // Reset Service specific state
+        mServerState.updateRequestForbidden(false, null, 0L);
         // Notify each controllers that RCS is disconnected.
         mEabController.onRcsDisconnected();
         mPublishController.onRcsDisconnected();
@@ -309,6 +403,34 @@ public class UceController {
         mSubscribeController.onDestroy();
         mOptionsController.onDestroy();
         mLooper.quit();
+    }
+
+    /**
+     * Notify all associated classes that the carrier configuration has changed for the subId.
+     */
+    public void onCarrierConfigChanged() {
+        mEabController.onCarrierConfigChanged();
+        mPublishController.onCarrierConfigChanged();
+        mSubscribeController.onCarrierConfigChanged();
+        mOptionsController.onCarrierConfigChanged();
+    }
+
+    private void handleCachedCapabilityEvent() {
+        Optional<Integer> requestPublishEvent = mCachedCapabilityEvent.getRequestPublishEvent();
+        requestPublishEvent.ifPresent(triggerType ->
+            onRequestPublishCapabilitiesFromService(triggerType));
+
+        Optional<Boolean> unpublishEvent = mCachedCapabilityEvent.getUnpublishEvent();
+        unpublishEvent.ifPresent(unpublish -> onUnpublish());
+
+        Optional<SomeArgs> remoteRequest = mCachedCapabilityEvent.getRemoteCapabilityRequestEvent();
+        remoteRequest.ifPresent(args -> {
+            Uri contactUri = (Uri) args.arg1;
+            List<String> remoteCapabilities = (List<String>) args.arg2;
+            IOptionsRequestCallback callback = (IOptionsRequestCallback) args.arg3;
+            retrieveOptionsCapabilitiesForRemote(contactUri, remoteCapabilities, callback);
+        });
+        mCachedCapabilityEvent.clear();
     }
 
     /*
@@ -358,18 +480,6 @@ public class UceController {
             logd("refreshCapabilities: " + contactNumbers.size());
             UceController.this.requestCapabilitiesInternal(contactNumbers, true, callback);
         }
-
-        @Override
-        public void registerPublishStateCallback(@NonNull IRcsUcePublishStateCallback c) {
-            logd("UceControllerCallback: registerPublishStateCallback");
-            UceController.this.registerPublishStateCallback(c);
-        }
-
-        @Override
-        public void unregisterPublishStateCallback(@NonNull IRcsUcePublishStateCallback c) {
-            logd("UceControllerCallback: unregisterPublishStateCallback");
-            UceController.this.unregisterPublishStateCallback(c);
-        }
     };
 
     @VisibleForTesting
@@ -384,18 +494,35 @@ public class UceController {
             new RcsFeatureManager.CapabilityExchangeEventCallback() {
                 @Override
                 public void onRequestPublishCapabilities(
-                        @StackPublishTriggerType int publishTriggerType) {
-                    onRequestPublishCapabilitiesFromService(publishTriggerType);
+                        @StackPublishTriggerType int triggerType) {
+                    if (isRcsConnecting()) {
+                        mCachedCapabilityEvent.setRequestPublishCapabilitiesEvent(triggerType);
+                        return;
+                    }
+                    onRequestPublishCapabilitiesFromService(triggerType);
                 }
 
                 @Override
                 public void onUnpublish() {
+                    if (isRcsConnecting()) {
+                        mCachedCapabilityEvent.setOnUnpublishEvent();
+                        return;
+                    }
                     UceController.this.onUnpublish();
                 }
 
                 @Override
                 public void onRemoteCapabilityRequest(Uri contactUri,
                         List<String> remoteCapabilities, IOptionsRequestCallback cb) {
+                    if (contactUri == null || remoteCapabilities == null || cb == null) {
+                        logw("onRemoteCapabilityRequest: parameter cannot be null");
+                        return;
+                    }
+                    if (isRcsConnecting()) {
+                        mCachedCapabilityEvent.setRemoteCapabilityRequestEvent(contactUri,
+                                remoteCapabilities, cb);
+                        return;
+                    }
                     retrieveOptionsCapabilitiesForRemote(contactUri, remoteCapabilities, cb);
                 }
             };
@@ -467,7 +594,7 @@ public class UceController {
         if (mServerState.isRequestForbidden()) {
             Integer errorCode = mServerState.getForbiddenErrorCode();
             long retryAfter = mServerState.getRetryAfterMillis();
-            logw("requestCapabilities: The request is forbidden, errorCode=" + errorCode
+            logw("requestAvailability: The request is forbidden, errorCode=" + errorCode
                 + ", retryAfter=" + retryAfter);
             errorCode = (errorCode != null) ? errorCode : RcsUceAdapter.ERROR_FORBIDDEN;
             c.onError(errorCode, retryAfter);
@@ -531,6 +658,51 @@ public class UceController {
     }
 
     /**
+     * Add new feature tags to the Set used to calculate the capabilities in PUBLISH.
+     * <p>
+     * Used for testing ONLY.
+     * @return the new capabilities that will be used for PUBLISH.
+     */
+    public RcsContactUceCapability addRegistrationOverrideCapabilities(Set<String> featureTags) {
+        return mPublishController.addRegistrationOverrideCapabilities(featureTags);
+    }
+
+    /**
+     * Remove existing feature tags to the Set used to calculate the capabilities in PUBLISH.
+     * <p>
+     * Used for testing ONLY.
+     * @return the new capabilities that will be used for PUBLISH.
+     */
+    public RcsContactUceCapability removeRegistrationOverrideCapabilities(Set<String> featureTags) {
+        return mPublishController.removeRegistrationOverrideCapabilities(featureTags);
+    }
+
+    /**
+     * Clear all overrides in the Set used to calculate the capabilities in PUBLISH.
+     * <p>
+     * Used for testing ONLY.
+     * @return the new capabilities that will be used for PUBLISH.
+     */
+    public RcsContactUceCapability clearRegistrationOverrideCapabilities() {
+        return mPublishController.clearRegistrationOverrideCapabilities();
+    }
+
+    /**
+     * @return current RcsContactUceCapability instance that will be used for PUBLISH.
+     */
+    public RcsContactUceCapability getLatestRcsContactUceCapability() {
+        return mPublishController.getLatestRcsContactUceCapability();
+    }
+
+    /**
+     * Get the PIDF XML associated with the last successful publish or null if not PUBLISHed to the
+     * network.
+     */
+    public String getLastPidfXml() {
+        return mPublishController.getLastPidfXml();
+    }
+
+    /**
      * Get the subscription ID.
      */
     public int getSubId() {
@@ -539,13 +711,21 @@ public class UceController {
 
     /**
      * Check if the UceController is available.
-     * @return true if the RCS is connected without destroyed.
+     * @return true if RCS is connected without destroyed.
      */
     public boolean isUnavailable() {
-        if (!mIsRcsConnected || mIsDestroyedFlag) {
+        if (!isRcsConnected() || mIsDestroyedFlag) {
             return true;
         }
         return false;
+    }
+
+    private boolean isRcsConnecting() {
+        return mRcsConnectedState == RCS_STATE_CONNECTING;
+    }
+
+    private boolean isRcsConnected() {
+        return mRcsConnectedState == RCS_STATE_CONNECTED;
     }
 
     /**
