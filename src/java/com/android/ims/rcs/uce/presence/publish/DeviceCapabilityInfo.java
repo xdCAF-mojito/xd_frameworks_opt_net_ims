@@ -20,6 +20,7 @@ import android.content.Context;
 import android.net.Uri;
 import android.telecom.TelecomManager;
 import android.telephony.AccessNetworkConstants;
+import android.telephony.ims.ImsRegistrationAttributes;
 import android.telephony.ims.RcsContactPresenceTuple;
 import android.telephony.ims.RcsContactPresenceTuple.ServiceCapabilities;
 import android.telephony.ims.RcsContactUceCapability;
@@ -28,10 +29,17 @@ import android.telephony.ims.RcsContactUceCapability.OptionsBuilder;
 import android.telephony.ims.RcsContactUceCapability.PresenceBuilder;
 import android.telephony.ims.feature.MmTelFeature;
 import android.telephony.ims.feature.MmTelFeature.MmTelCapabilities;
+import android.util.IndentingPrintWriter;
+import android.util.ArraySet;
+import android.util.LocalLog;
 import android.util.Log;
 
 import com.android.ims.rcs.uce.util.FeatureTags;
 import com.android.ims.rcs.uce.util.UceUtils;
+
+import java.io.PrintWriter;
+import java.util.Collections;
+import java.util.Set;
 
 /**
  * Stores the device's capabilities information.
@@ -41,6 +49,25 @@ public class DeviceCapabilityInfo {
 
     private final int mSubId;
 
+    private final LocalLog mLocalLog = new LocalLog(UceUtils.LOG_SIZE);
+
+    // FT overrides to add to the IMS registration, which will be added to the existing
+    // capabilities.
+    private final Set<String> mOverrideAddFeatureTags = new ArraySet<>();
+
+    // FT overrides to remove from the existing IMS registration, which will remove the related
+    // capabilities.
+    private final Set<String> mOverrideRemoveFeatureTags = new ArraySet<>();
+
+    // Tracks capability status based on the IMS registration.
+    private PublishServiceDescTracker mServiceCapRegTracker;
+
+    // The feature tags associated with the last IMS registration update.
+    private Set<String> mLastRegistrationFeatureTags = Collections.emptySet();
+    // The feature tags associated with the last IMS registration update, which also include
+    // overrides
+    private Set<String> mLastRegistrationOverrideFeatureTags = Collections.emptySet();
+
     // The mmtel feature is registered or not
     private boolean mMmtelRegistered;
 
@@ -49,6 +76,9 @@ public class DeviceCapabilityInfo {
 
     // The rcs feature is registered or not
     private boolean mRcsRegistered;
+
+    // Whether or not presence is reported as capable
+    private boolean mPresenceCapable;
 
     // The network type which ims rcs registers on.
     private int mRcsNetworkRegType;
@@ -62,8 +92,9 @@ public class DeviceCapabilityInfo {
     private boolean mMobileData;
     private boolean mVtSetting;
 
-    public DeviceCapabilityInfo(int subId) {
+    public DeviceCapabilityInfo(int subId, String[] capToRegistrationMap) {
         mSubId = subId;
+        mServiceCapRegTracker = PublishServiceDescTracker.fromCarrierConfig(capToRegistrationMap);
         reset();
     }
 
@@ -81,6 +112,20 @@ public class DeviceCapabilityInfo {
         mMobileData = true;
         mVtSetting = true;
         mMmTelCapabilities = new MmTelCapabilities();
+    }
+
+    /**
+     * Update the capability registration tracker feature tag override mapping.
+     * @return if true, this has caused a change in the Feature Tags associated with the device
+     * and a new PUBLISH should be generated.
+     */
+    public synchronized boolean updateCapabilityRegistrationTrackerMap(String[] newMap) {
+        Set<String> oldTags = mServiceCapRegTracker.copyRegistrationFeatureTags();
+        mServiceCapRegTracker = PublishServiceDescTracker.fromCarrierConfig(newMap);
+        mServiceCapRegTracker.updateImsRegistration(mLastRegistrationOverrideFeatureTags);
+        boolean changed = !oldTags.equals(mServiceCapRegTracker.copyRegistrationFeatureTags());
+        if (changed) logi("Carrier Config Change resulted in associated FT list change");
+        return changed;
     }
 
     public synchronized boolean isImsRegistered() {
@@ -117,34 +162,99 @@ public class DeviceCapabilityInfo {
         mMmtelNetworkRegType = AccessNetworkConstants.TRANSPORT_TYPE_INVALID;
     }
 
+    public synchronized void updatePresenceCapable(boolean isCapable) {
+        mPresenceCapable = isCapable;
+    }
+
     /**
      * Update the status that IMS RCS is registered.
+     * @return true if the IMS registration status changed, false if it did not.
      */
-    public synchronized void updateImsRcsRegistered(int type) {
+    public synchronized boolean updateImsRcsRegistered(ImsRegistrationAttributes attr) {
         StringBuilder builder = new StringBuilder();
         builder.append("IMS RCS registered: original state=").append(mRcsRegistered)
                 .append(", changes type from ").append(mRcsNetworkRegType)
-                .append(" to ").append(type);
+                .append(" to ").append(attr.getTransportType());
         logi(builder.toString());
 
+        boolean changed = false;
         if (!mRcsRegistered) {
             mRcsRegistered = true;
+            changed = true;
         }
 
-        if (mRcsNetworkRegType != type) {
-            mRcsNetworkRegType = type;
+        if (mRcsNetworkRegType != attr.getTransportType()) {
+            mRcsNetworkRegType = attr.getTransportType();
+            changed = true;
         }
+
+        mLastRegistrationFeatureTags = attr.getFeatureTags();
+        changed |= updateRegistration(mLastRegistrationFeatureTags);
+
+        return changed;
     }
 
     /**
      * Update the status that IMS RCS is unregistered.
      */
-    public synchronized void updateImsRcsUnregistered() {
+    public synchronized boolean updateImsRcsUnregistered() {
         logi("IMS RCS unregistered: original state=" + mRcsRegistered);
+        boolean changed = false;
         if (mRcsRegistered) {
             mRcsRegistered = false;
+            changed = true;
         }
         mRcsNetworkRegType = AccessNetworkConstants.TRANSPORT_TYPE_INVALID;
+        return changed;
+    }
+
+    public synchronized boolean addRegistrationOverrideCapabilities(Set<String> featureTags) {
+        logd("override - add: " + featureTags);
+        mOverrideRemoveFeatureTags.removeAll(featureTags);
+        mOverrideAddFeatureTags.addAll(featureTags);
+        // Call with the last feature tags so that the new ones will be potentially picked up.
+        return updateRegistration(mLastRegistrationFeatureTags);
+    };
+
+    public synchronized boolean removeRegistrationOverrideCapabilities(Set<String> featureTags) {
+        logd("override - remove: " + featureTags);
+        mOverrideAddFeatureTags.removeAll(featureTags);
+        mOverrideRemoveFeatureTags.addAll(featureTags);
+        // Call with the last feature tags so that the new ones will be potentially picked up.
+        return updateRegistration(mLastRegistrationFeatureTags);
+    };
+
+    public synchronized boolean clearRegistrationOverrideCapabilities() {
+        logd("override - clear");
+        mOverrideAddFeatureTags.clear();
+        mOverrideRemoveFeatureTags.clear();
+        // Call with the last feature tags so that base tags will be restored
+        return updateRegistration(mLastRegistrationFeatureTags);
+    };
+
+    /**
+     * Update the IMS registration tracked by the PublishServiceDescTracker if needed.
+     * @return true if the registration changed, else otherwise.
+     */
+    private boolean updateRegistration(Set<String> baseTags) {
+        Set<String> updatedTags = updateImsRegistrationFeatureTags(baseTags);
+        if (!mLastRegistrationOverrideFeatureTags.equals(updatedTags)) {
+            mLastRegistrationOverrideFeatureTags = updatedTags;
+            mServiceCapRegTracker.updateImsRegistration(updatedTags);
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Combine IMS registration with overrides to produce a new feature tag Set.
+     * @return true if the IMS registration changed, false otherwise.
+     */
+    private synchronized Set<String> updateImsRegistrationFeatureTags(Set<String> featureTags) {
+        Set<String> tags = new ArraySet<>(featureTags);
+        tags.addAll(mOverrideAddFeatureTags);
+        tags.removeAll(mOverrideRemoveFeatureTags);
+        return tags;
     }
 
     /**
@@ -234,6 +344,10 @@ public class DeviceCapabilityInfo {
         return false;
     }
 
+    public synchronized boolean isPresenceCapable() {
+        return mPresenceCapable;
+    }
+
     private boolean isVolteAvailable(int networkRegType, MmTelCapabilities capabilities) {
         return (networkRegType == AccessNetworkConstants.TRANSPORT_TYPE_WWAN)
                 && capabilities.isCapable(MmTelFeature.MmTelCapabilities.CAPABILITY_TYPE_VOICE);
@@ -282,31 +396,58 @@ public class DeviceCapabilityInfo {
             logw("getPresenceCapabilities: uri is empty");
             return null;
         }
-        ServiceCapabilities.Builder servCapsBuilder = new ServiceCapabilities.Builder(
-                hasVolteCapability(), hasVtCapability());
-        servCapsBuilder.addSupportedDuplexMode(ServiceCapabilities.DUPLEX_MODE_FULL);
-
-        RcsContactPresenceTuple.Builder tupleBuilder = new RcsContactPresenceTuple.Builder(
-                RcsContactPresenceTuple.TUPLE_BASIC_STATUS_OPEN,
-                RcsContactPresenceTuple.SERVICE_ID_MMTEL, "1.0");
-        tupleBuilder.setContactUri(uri).setServiceCapabilities(servCapsBuilder.build());
-
-        RcsContactPresenceTuple.Builder callComposerTupleBuilder =
-                new RcsContactPresenceTuple.Builder(
-                        RcsContactPresenceTuple.TUPLE_BASIC_STATUS_OPEN,
-                        RcsContactPresenceTuple.SERVICE_ID_CALL_COMPOSER, "2.0");
-        callComposerTupleBuilder.setContactUri(uri).setServiceCapabilities(
-                servCapsBuilder.build());
+        Set<ServiceDescription> capableFromReg =
+                mServiceCapRegTracker.copyRegistrationCapabilities();
 
         PresenceBuilder presenceBuilder = new PresenceBuilder(uri,
                 RcsContactUceCapability.SOURCE_TYPE_CACHED,
                 RcsContactUceCapability.REQUEST_RESULT_FOUND);
-        presenceBuilder.addCapabilityTuple(tupleBuilder.build());
+        // RCS presence tag (added to all presence documents)
+        ServiceDescription presDescription = getCustomizedDescription(
+                ServiceDescription.SERVICE_DESCRIPTION_PRESENCE, capableFromReg);
+        addCapability(presenceBuilder, presDescription.getTupleBuilder(), uri);
+        capableFromReg.remove(presDescription);
+
+        // mmtel
+        ServiceDescription voiceDescription = getCustomizedDescription(
+                ServiceDescription.SERVICE_DESCRIPTION_MMTEL_VOICE, capableFromReg);
+        ServiceDescription vtDescription = getCustomizedDescription(
+                ServiceDescription.SERVICE_DESCRIPTION_MMTEL_VOICE_VIDEO, capableFromReg);
+        ServiceDescription descToUse = (hasVolteCapability() && hasVtCapability()) ?
+                vtDescription : voiceDescription;
+        ServiceCapabilities servCaps = new ServiceCapabilities.Builder(
+                hasVolteCapability(), hasVtCapability())
+                .addSupportedDuplexMode(ServiceCapabilities.DUPLEX_MODE_FULL).build();
+        addCapability(presenceBuilder, descToUse.getTupleBuilder()
+                .setServiceCapabilities(servCaps), uri);
+        capableFromReg.remove(voiceDescription);
+        capableFromReg.remove(vtDescription);
+
+        // call composer via mmtel
+        ServiceDescription composerDescription = getCustomizedDescription(
+                ServiceDescription.SERVICE_DESCRIPTION_CALL_COMPOSER_MMTEL, capableFromReg);
         if (hasCallComposerCapability()) {
-            presenceBuilder.addCapabilityTuple(callComposerTupleBuilder.build());
+            addCapability(presenceBuilder, composerDescription.getTupleBuilder(), uri);
+        }
+        capableFromReg.remove(composerDescription);
+
+        // External features can only be found using registration states from other components.
+        // Count these features as capable and include in PIDF XML if they are registered.
+        for (ServiceDescription capability : capableFromReg) {
+            addCapability(presenceBuilder, capability.getTupleBuilder(), uri);
         }
 
         return presenceBuilder.build();
+    }
+
+    /**
+     * Search the refSet for the ServiceDescription that matches the service-id && version and
+     * return that or return the reference if there is no match.
+     */
+    private ServiceDescription getCustomizedDescription(ServiceDescription reference,
+            Set<ServiceDescription> refSet) {
+        return refSet.stream().filter(s -> s.serviceId.equals(reference.serviceId)
+                && s.version.equals(reference.version)).findFirst().orElse(reference);
     }
 
     // Get the device's capabilities with the OPTIONS mechanism.
@@ -317,38 +458,53 @@ public class DeviceCapabilityInfo {
             return null;
         }
 
+        Set<String> capableFromReg = mServiceCapRegTracker.copyRegistrationFeatureTags();
+
         OptionsBuilder optionsBuilder = new OptionsBuilder(uri);
         optionsBuilder.setRequestResult(RcsContactUceCapability.REQUEST_RESULT_FOUND);
-        FeatureTags.addMmTelFeatureTags(optionsBuilder,
-                hasVolteCapability(), hasVtCapability());
+        FeatureTags.addFeatureTags(optionsBuilder, hasVolteCapability(), hasVtCapability(),
+                isPresenceCapable(), hasCallComposerCapability(), capableFromReg);
         return optionsBuilder.build();
+    }
+
+    private void addCapability(RcsContactUceCapability.PresenceBuilder presenceBuilder,
+            RcsContactPresenceTuple.Builder tupleBuilder, Uri contactUri) {
+        presenceBuilder.addCapabilityTuple(tupleBuilder.setContactUri(contactUri).build());
     }
 
     // Check if the device has the VoLTE capability
     private synchronized boolean hasVolteCapability() {
-        if (mMmTelCapabilities != null
-                && mMmTelCapabilities.isCapable(MmTelCapabilities.CAPABILITY_TYPE_VOICE)) {
-            return true;
-        }
-        return false;
+        return overrideCapability(FeatureTags.FEATURE_TAG_MMTEL, mMmTelCapabilities != null
+                && mMmTelCapabilities.isCapable(MmTelCapabilities.CAPABILITY_TYPE_VOICE));
     }
 
     // Check if the device has the VT capability
     private synchronized boolean hasVtCapability() {
-        if (mMmTelCapabilities != null
-                && mMmTelCapabilities.isCapable(MmTelCapabilities.CAPABILITY_TYPE_VIDEO)) {
-            return true;
-        }
-        return false;
+        return overrideCapability(FeatureTags.FEATURE_TAG_VIDEO, mMmTelCapabilities != null
+                && mMmTelCapabilities.isCapable(MmTelCapabilities.CAPABILITY_TYPE_VIDEO));
     }
 
     // Check if the device has the Call Composer capability
     private synchronized boolean hasCallComposerCapability() {
-        if (mMmTelCapabilities != null && mMmTelCapabilities.isCapable(
-                MmTelCapabilities.CAPABILITY_TYPE_CALL_COMPOSER)) {
+        return overrideCapability(FeatureTags.FEATURE_TAG_CALL_COMPOSER_VIA_TELEPHONY,
+                mMmTelCapabilities != null && mMmTelCapabilities.isCapable(
+                        MmTelCapabilities.CAPABILITY_TYPE_CALL_COMPOSER));
+    }
+
+    /**
+     * @return the overridden value for the provided feature tag or the original capability if there
+     * is no override.
+     */
+    private synchronized boolean overrideCapability(String featureTag, boolean originalCap) {
+        if (mOverrideRemoveFeatureTags.contains(featureTag)) {
+            return false;
+        }
+
+        if (mOverrideAddFeatureTags.contains(featureTag)) {
             return true;
         }
-        return false;
+
+        return originalCap;
     }
 
     private synchronized MmTelCapabilities deepCopyCapabilities(MmTelCapabilities capabilities) {
@@ -373,14 +529,17 @@ public class DeviceCapabilityInfo {
 
     private void logd(String log) {
         Log.d(LOG_TAG, getLogPrefix().append(log).toString());
+        mLocalLog.log("[D] " + log);
     }
 
     private void logi(String log) {
         Log.i(LOG_TAG, getLogPrefix().append(log).toString());
+        mLocalLog.log("[I] " + log);
     }
 
     private void logw(String log) {
         Log.w(LOG_TAG, getLogPrefix().append(log).toString());
+        mLocalLog.log("[W] " + log);
     }
 
     private StringBuilder getLogPrefix() {
@@ -388,5 +547,20 @@ public class DeviceCapabilityInfo {
         builder.append(mSubId);
         builder.append("] ");
         return builder;
+    }
+
+    public void dump(PrintWriter printWriter) {
+        IndentingPrintWriter pw = new IndentingPrintWriter(printWriter, "  ");
+        pw.println("DeviceCapabilityInfo :");
+        pw.increaseIndent();
+
+        mServiceCapRegTracker.dump(pw);
+
+        pw.println("Log:");
+        pw.increaseIndent();
+        mLocalLog.dump(pw);
+        pw.decreaseIndent();
+
+        pw.decreaseIndent();
     }
 }

@@ -49,6 +49,7 @@ import com.android.ims.rcs.uce.UceController.UceControllerCallback;
 import com.android.internal.annotations.VisibleForTesting;
 
 import java.time.Instant;
+import java.time.format.DateTimeParseException;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.GregorianCalendar;
@@ -94,7 +95,7 @@ public class EabControllerImpl implements EabController {
                 this,
                 new EabContactSyncController(),
                 mUceControllerCallback,
-                looper);
+                mHandler);
     }
 
     @Override
@@ -110,6 +111,13 @@ public class EabControllerImpl implements EabController {
         Log.d(TAG, "onDestroy");
         mIsSetDestroyedFlag = true;
         mEabBulkCapabilityUpdater.onDestroy();
+    }
+
+    @Override
+    public void onCarrierConfigChanged() {
+        // Pick up changes to CarrierConfig and run any applicable cleanup tasks associated with
+        // that configuration.
+        mCapabilityCleanupRunnable.run();
     }
 
     /**
@@ -376,7 +384,14 @@ public class EabControllerImpl implements EabController {
             rcsContactPresenceTupleBuilder.setServiceCapabilities(serviceCapabilities);
         }
         if (timeStamp != null) {
-            rcsContactPresenceTupleBuilder.setTimestamp(timeStamp);
+            try {
+                Instant instant = Instant.ofEpochSecond(Long.parseLong(timeStamp));
+                rcsContactPresenceTupleBuilder.setTime(instant);
+            } catch (NumberFormatException ex) {
+                Log.w(TAG, "Create presence tuple: NumberFormatException");
+            } catch (DateTimeParseException e) {
+                Log.w(TAG, "Create presence tuple: parse timestamp failed");
+            }
         }
 
         return rcsContactPresenceTupleBuilder.build();
@@ -557,21 +572,8 @@ public class EabControllerImpl implements EabController {
 
             // Using the current timestamp if the timestamp doesn't populate
             Long timestamp;
-            if (tuple.getTimestamp() != null) {
-                try {
-                    Time time = new Time();
-                    time.parse3339(tuple.getTimestamp());
-
-                    GregorianCalendar date = new GregorianCalendar(
-                            time.year, time.month, time.monthDay,
-                            time.hour, time.minute, time.second);
-                    date.setTimeZone(TimeZone.getTimeZone("UTC"));
-                    timestamp = date.getTime().getTime() / 1000;
-                } catch (TimeFormatException ex) {
-                    Log.d(TAG, "Fail on parsing the timestamp. "
-                            + "Timestamp: " + tuple.getTimestamp());
-                    timestamp = Instant.now().getEpochSecond();
-                }
+            if (tuple.getTime() != null) {
+                timestamp = tuple.getTime().getEpochSecond();
             } else {
                 timestamp = Instant.now().getEpochSecond();
             }
@@ -635,18 +637,18 @@ public class EabControllerImpl implements EabController {
         Uri result = mContext.getContentResolver().insert(EabProvider.COMMON_URI, contentValues);
 
         int commonId = Integer.valueOf(result.getLastPathSegment());
-        ContentValues[] optionContent =
-                new ContentValues[capability.getOptionsFeatureTags().size()];
-
-        for (int i = 0; i < optionContent.length; i++) {
-            String feature = capability.getOptionsFeatureTags().get(i);
+        List<ContentValues> optionContentList = new ArrayList<>();
+        for (String feature : capability.getFeatureTags()) {
             contentValues = new ContentValues();
             contentValues.put(EabProvider.OptionsColumns.EAB_COMMON_ID, commonId);
             contentValues.put(EabProvider.OptionsColumns.FEATURE_TAG, feature);
             contentValues.put(EabProvider.OptionsColumns.REQUEST_TIMESTAMP,
                     Instant.now().getEpochSecond());
-            optionContent[i] = contentValues;
+            optionContentList.add(contentValues);
         }
+
+        ContentValues[] optionContent = new ContentValues[optionContentList.size()];
+        optionContent = optionContentList.toArray(optionContent);
         mContext.getContentResolver().bulkInsert(EabProvider.OPTIONS_URI, optionContent);
     }
 

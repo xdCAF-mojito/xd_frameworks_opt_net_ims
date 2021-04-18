@@ -33,6 +33,7 @@ import java.util.Optional;
 public class PublishRequestResponse {
 
     private final long mTaskId;
+    private final String mPidfXml;
     private volatile boolean mNeedRetry;
     private volatile PublishControllerCallback mPublishCtrlCallback;
 
@@ -45,8 +46,10 @@ public class PublishRequestResponse {
     // The timestamp when receive the response from the network.
     private Instant mResponseTimestamp;
 
-    public PublishRequestResponse(PublishControllerCallback publishCtrlCallback, long taskId) {
+    public PublishRequestResponse(PublishControllerCallback publishCtrlCallback, long taskId,
+            String pidfXml) {
         mTaskId = taskId;
+        mPidfXml = pidfXml;
         mPublishCtrlCallback = publishCtrlCallback;
         mCmdErrorCode = Optional.empty();
         mNetworkRespSipCode = Optional.empty();
@@ -125,6 +128,13 @@ public class PublishRequestResponse {
         return mResponseTimestamp;
     }
 
+    /**
+     * @return the PIDF XML sent during this request.
+     */
+    public String getPidfXml() {
+        return mPidfXml;
+    }
+
     public void onDestroy() {
         mPublishCtrlCallback = null;
     }
@@ -200,10 +210,41 @@ public class PublishRequestResponse {
      * Check whether the publishing request is successful.
      */
     public boolean isRequestSuccess() {
+        if (isCommandError()) {
+            return false;
+        }
+        // The result of the request was treated as successful if the command error code is present
+        // and its value is COMMAND_CODE_NO_CHANGE.
+        if (isCommandCodeNoChange()) {
+            return true;
+        }
+
         final int sipCodeOk = NetworkSipCode.SIP_CODE_OK;
         if (getNetworkRespSipCode().filter(c -> c == sipCodeOk).isPresent() &&
                 (!getReasonHeaderCause().isPresent()
                         || getReasonHeaderCause().filter(c -> c == sipCodeOk).isPresent())) {
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Check if the PUBLISH request is failed with receiving the command error.
+     * @return true if the command is failure.
+     */
+    private boolean isCommandError() {
+        // The request is failed if the command error code is present and its value is not
+        // COMMAND_CODE_NO_CHANGE.
+        if (getCmdErrorCode().isPresent() && !isCommandCodeNoChange()) {
+            return true;
+        }
+        return false;
+    }
+
+    // @return true If it received the command code COMMAND_CODE_NO_CHANGE
+    private boolean isCommandCodeNoChange() {
+        if (getCmdErrorCode().filter(code ->
+                code == RcsCapabilityExchangeImplBase.COMMAND_CODE_NO_CHANGE).isPresent()) {
             return true;
         }
         return false;
@@ -217,9 +258,20 @@ public class PublishRequestResponse {
     }
 
     /**
+     * @return The publish state when the publish request is finished.
+     */
+     public int getPublishState() {
+         if (isCommandError()) {
+             return getPublishStateByCmdErrorCode();
+         } else {
+             return getPublishStateByNetworkResponse();
+         }
+     }
+
+    /**
      * Convert the command error code to the publish state
      */
-    public int getPublishStateByCmdErrorCode() {
+    private int getPublishStateByCmdErrorCode() {
         if (getCmdErrorCode().orElse(-1) ==
                 RcsCapabilityExchangeImplBase.COMMAND_CODE_REQUEST_TIMEOUT) {
             return RcsUceAdapter.PUBLISH_STATE_REQUEST_TIMEOUT;
@@ -230,9 +282,12 @@ public class PublishRequestResponse {
     /**
      * Convert the network sip code to the publish state
      */
-    public int getPublishStateByNetworkResponse() {
+    private int getPublishStateByNetworkResponse() {
         int respSipCode;
-        if (getReasonHeaderCause().isPresent()) {
+        if (isCommandCodeNoChange()) {
+            // If the command code is COMMAND_CODE_NO_CHANGE, it should be treated as successful.
+            respSipCode = NetworkSipCode.SIP_CODE_OK;
+        } else if (getReasonHeaderCause().isPresent()) {
             respSipCode = getReasonHeaderCause().get();
         } else {
             respSipCode = getNetworkRespSipCode().orElse(-1);

@@ -28,7 +28,8 @@ import static org.mockito.Mockito.verify;
 
 import android.content.SharedPreferences;
 import android.net.Uri;
-import android.os.Looper;
+import android.os.Handler;
+import android.os.HandlerThread;
 import android.os.PersistableBundle;
 import android.telephony.CarrierConfigManager;
 import android.telephony.ims.ImsException;
@@ -51,6 +52,10 @@ import java.util.List;
 public class EabBulkCapabilityUpdaterTest extends ImsTestBase {
 
     private final int mSubId = 1;
+
+    private Handler mHandler;
+    private HandlerThread mHandlerThread;
+
     @Mock
     private UceController.UceControllerCallback mMockUceControllerCallback;
     @Mock
@@ -70,6 +75,10 @@ public class EabBulkCapabilityUpdaterTest extends ImsTestBase {
     public void setUp() throws Exception {
         super.setUp();
 
+        mHandlerThread = new HandlerThread("TestThread");
+        mHandlerThread.start();
+        mHandler = mHandlerThread.getThreadHandler();
+
         doReturn(mSharedPreferences).when(mContext).getSharedPreferences(anyString(), anyInt());
         doReturn(0L).when(mSharedPreferences).getLong(anyString(), anyInt());
         doReturn(mSharedPreferencesEditor).when(mSharedPreferences).edit();
@@ -80,6 +89,7 @@ public class EabBulkCapabilityUpdaterTest extends ImsTestBase {
     @After
     public void tearDown() throws Exception {
         super.tearDown();
+        mHandlerThread.quit();
     }
 
     @Test
@@ -94,14 +104,15 @@ public class EabBulkCapabilityUpdaterTest extends ImsTestBase {
                 .when(mEabContactSyncController)
                 .syncContactToEabProvider(any());
 
-        EabBulkCapabilityUpdater eabBulkCapabilityUpdater = new EabBulkCapabilityUpdater(
+        new EabBulkCapabilityUpdater(
                 mContext,
                 mSubId,
                 mMockEabControllerImpl,
                 mEabContactSyncController,
                 mMockUceControllerCallback,
-                Looper.getMainLooper());
+                mHandler);
 
+        waitHandlerThreadFinish();
 
         verify(mMockUceControllerCallback).refreshCapabilities(
                 anyList(),
@@ -120,13 +131,15 @@ public class EabBulkCapabilityUpdaterTest extends ImsTestBase {
                 .when(mEabContactSyncController)
                 .syncContactToEabProvider(any());
 
-        EabBulkCapabilityUpdater eabBulkCapabilityUpdater = new EabBulkCapabilityUpdater(
+        new EabBulkCapabilityUpdater(
                 mContext,
                 mSubId,
                 mMockEabControllerImpl,
                 mEabContactSyncController,
                 mMockUceControllerCallback,
-                Looper.getMainLooper());
+                mHandler);
+
+        waitHandlerThreadFinish();
 
         verify(mMockUceControllerCallback, never()).refreshCapabilities(
                 any(),
@@ -145,13 +158,15 @@ public class EabBulkCapabilityUpdaterTest extends ImsTestBase {
                 .when(mEabContactSyncController)
                 .syncContactToEabProvider(any());
 
-        EabBulkCapabilityUpdater eabBulkCapabilityUpdater = new EabBulkCapabilityUpdater(
+        new EabBulkCapabilityUpdater(
                 mContext,
                 mSubId,
                 mMockEabControllerImpl,
                 mEabContactSyncController,
                 mMockUceControllerCallback,
-                Looper.getMainLooper());
+                mHandler);
+
+        waitHandlerThreadFinish();
 
         verify(mMockUceControllerCallback, never()).refreshCapabilities(
                 anyList(),
@@ -173,5 +188,13 @@ public class EabBulkCapabilityUpdaterTest extends ImsTestBase {
         doReturn(mImsRcsManager).when(imsManager).getImsRcsManager(eq(mSubId));
         doReturn(mRcsUceAdapter).when(mImsRcsManager).getUceAdapter();
         doReturn(isEnabled).when(mRcsUceAdapter).isUceSettingEnabled();
+    }
+
+    private void waitHandlerThreadFinish() throws Exception {
+        int retryTimes = 0;
+        do {
+            Thread.sleep(1000);
+            retryTimes++;
+        } while(mHandler.hasMessagesOrCallbacks() && retryTimes < 2);
     }
 }

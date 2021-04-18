@@ -57,7 +57,7 @@ public class PublishProcessorTest extends ImsTestBase {
     @Before
     public void setUp() throws Exception {
         super.setUp();
-        doReturn(true).when(mProcessorState).isCurrentTimeAllowed();
+        doReturn(true).when(mProcessorState).isPublishAllowedAtThisTime();
         doReturn(mTaskId).when(mProcessorState).getCurrentTaskId();
 
         doReturn(true).when(mDeviceCapabilities).isImsRegistered();
@@ -83,16 +83,6 @@ public class PublishProcessorTest extends ImsTestBase {
         verify(mProcessorState).setPublishingFlag(true);
         verify(mRcsFeatureManager).requestPublication(any(), any());
         verify(mPublishCtrlCallback).setupRequestCanceledTimer(anyLong(), anyLong());
-    }
-
-    @Test
-    @SmallTest
-    public void testDoPublishWithResetRetryCount() throws Exception {
-        PublishProcessor publishProcessor = getPublishProcessor();
-
-        publishProcessor.doPublish(PublishController.PUBLISH_TRIGGER_SERVICE);
-
-        verify(mProcessorState).resetRetryCount();
     }
 
     @Test
@@ -124,7 +114,7 @@ public class PublishProcessorTest extends ImsTestBase {
 
         publishProcessor.doPublish(PublishController.PUBLISH_TRIGGER_RETRY);
 
-        verify(mProcessorState).setPendingRequest(true);
+        verify(mProcessorState).setPendingRequest(PublishController.PUBLISH_TRIGGER_RETRY);
         verify(mRcsFeatureManager, never()).requestPublication(any(), any());
     }
 
@@ -140,7 +130,7 @@ public class PublishProcessorTest extends ImsTestBase {
 
         publishProcessor.onNetworkResponse(mResponseCallback);
 
-        verify(mPublishCtrlCallback).updatePublishRequestResult(anyInt(), any());
+        verify(mPublishCtrlCallback).updatePublishRequestResult(anyInt(), any(), any());
         verify(mResponseCallback).onDestroy();
         verify(mProcessorState).setPublishingFlag(false);
         verify(mPublishCtrlCallback).clearRequestCanceledTimer();
@@ -149,13 +139,13 @@ public class PublishProcessorTest extends ImsTestBase {
     @Test
     @SmallTest
     public void testNotPublishWhenCurrentTimeNotAllowed() throws Exception {
-        doReturn(false).when(mProcessorState).isCurrentTimeAllowed();
+        doReturn(false).when(mProcessorState).isPublishAllowedAtThisTime();
         PublishProcessor publishProcessor = getPublishProcessor();
 
         publishProcessor.doPublish(PublishController.PUBLISH_TRIGGER_RETRY);
 
         verify(mPublishCtrlCallback).requestPublishFromInternal(
-                eq(PublishController.PUBLISH_TRIGGER_RETRY), anyLong());
+                eq(PublishController.PUBLISH_TRIGGER_RETRY));
         verify(mRcsFeatureManager, never()).requestPublication(any(), any());
     }
 
@@ -172,7 +162,7 @@ public class PublishProcessorTest extends ImsTestBase {
 
         verify(mProcessorState).increaseRetryCount();
         verify(mPublishCtrlCallback).requestPublishFromInternal(
-                eq(PublishController.PUBLISH_TRIGGER_RETRY), anyLong());
+                eq(PublishController.PUBLISH_TRIGGER_RETRY));
         verify(mResponseCallback).onDestroy();
         verify(mProcessorState).setPublishingFlag(false);
         verify(mPublishCtrlCallback).clearRequestCanceledTimer();
@@ -189,7 +179,7 @@ public class PublishProcessorTest extends ImsTestBase {
 
         publishProcessor.onCommandError(mResponseCallback);
 
-        verify(mPublishCtrlCallback).updatePublishRequestResult(anyInt(), any());
+        verify(mPublishCtrlCallback).updatePublishRequestResult(anyInt(), any(), any());
         verify(mResponseCallback).onDestroy();
         verify(mProcessorState).setPublishingFlag(false);
         verify(mPublishCtrlCallback).clearRequestCanceledTimer();
@@ -208,7 +198,7 @@ public class PublishProcessorTest extends ImsTestBase {
 
         verify(mProcessorState).increaseRetryCount();
         verify(mPublishCtrlCallback).requestPublishFromInternal(
-                eq(PublishController.PUBLISH_TRIGGER_RETRY), anyLong());
+                eq(PublishController.PUBLISH_TRIGGER_RETRY));
         verify(mResponseCallback).onDestroy();
         verify(mProcessorState).setPublishingFlag(false);
         verify(mPublishCtrlCallback).clearRequestCanceledTimer();
@@ -226,7 +216,7 @@ public class PublishProcessorTest extends ImsTestBase {
 
         publishProcessor.onNetworkResponse(mResponseCallback);
 
-        verify(mPublishCtrlCallback).updatePublishRequestResult(anyInt(), any());
+        verify(mPublishCtrlCallback).updatePublishRequestResult(anyInt(), any(), any());
         verify(mResponseCallback).onDestroy();
         verify(mProcessorState).setPublishingFlag(false);
         verify(mPublishCtrlCallback).clearRequestCanceledTimer();
