@@ -16,6 +16,8 @@
 
 package com.android.ims.rcs.uce.request;
 
+import static android.telephony.ims.RcsContactUceCapability.SOURCE_TYPE_NETWORK;
+
 import android.annotation.NonNull;
 import android.net.Uri;
 import android.os.RemoteException;
@@ -103,7 +105,10 @@ public class OptionsRequest extends CapabilityRequest {
 
         logi("requestCapabilities: featureTag size=" + featureTags.size());
         try {
+            // Send the capabilities request.
             optionsController.sendCapabilitiesRequest(mContactUri, featureTags, mResponseCallback);
+            // Setup the timeout timer.
+            setupRequestTimeoutTimer();
         } catch (RemoteException e) {
             logw("requestCapabilities exception: " + e);
             mRequestResponse.setRequestInternalError(RcsUceAdapter.ERROR_GENERIC_FAILURE);
@@ -115,6 +120,7 @@ public class OptionsRequest extends CapabilityRequest {
     private void onCommandError(@CommandCode int cmdError) {
         logd("onCommandError: error code=" + cmdError);
         if (mIsFinished) {
+            logw("onCommandError: The request is already finished");
             return;
         }
         mRequestResponse.setCommandError(cmdError);
@@ -126,6 +132,7 @@ public class OptionsRequest extends CapabilityRequest {
         logd("onNetworkResponse: sipCode=" + sipCode + ", reason=" + reason
                 + ", remoteCap size=" + ((remoteCaps == null) ? "null" : remoteCaps.size()));
         if (mIsFinished) {
+            logw("onNetworkResponse: The request is already finished");
             return;
         }
 
@@ -144,6 +151,9 @@ public class OptionsRequest extends CapabilityRequest {
         mRequestManagerCallback.notifyNetworkResponse(mCoordinatorId, mTaskId);
     }
 
+    /**
+     * Convert the remote capabilities from string list type to RcsContactUceCapability.
+     */
     private RcsContactUceCapability getContactCapabilities(Uri contact, int sipCode,
             Set<String> featureTags) {
         int requestResult = RcsContactUceCapability.REQUEST_RESULT_FOUND;
@@ -166,7 +176,7 @@ public class OptionsRequest extends CapabilityRequest {
         }
 
         RcsContactUceCapability.OptionsBuilder optionsBuilder
-                = new RcsContactUceCapability.OptionsBuilder(contact);
+                = new RcsContactUceCapability.OptionsBuilder(contact, SOURCE_TYPE_NETWORK);
         optionsBuilder.setRequestResult(requestResult);
         optionsBuilder.addFeatureTags(featureTags);
         return optionsBuilder.build();
