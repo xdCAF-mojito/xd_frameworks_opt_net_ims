@@ -25,17 +25,27 @@ import android.util.Log;
 
 import com.android.ims.rcs.uce.util.UceUtils;
 
+import java.util.Arrays;
+
 /**
  * The util class of publishing device's capabilities.
  */
-class PublishUtils {
+public class PublishUtils {
     private static final String LOG_TAG = UceUtils.getLogPrefix() + "PublishUtils";
 
     private static final String SCHEME_SIP = "sip";
     private static final String SCHEME_TEL = "tel";
     private static final String DOMAIN_SEPARATOR = "@";
 
-    public static Uri getDeviceContactUri(Context context, int subId) {
+    public static Uri getDeviceContactUri(Context context, int subId,
+            DeviceCapabilityInfo deviceCap) {
+        // Get the uri from the IMS associated URI which is provided by the IMS service.
+        Uri contactUri = deviceCap.getImsAssociatedUri();
+        if (contactUri != null) {
+            Log.d(LOG_TAG, "getDeviceContactUri: ims associated uri");
+            return contactUri;
+        }
+
         TelephonyManager telephonyManager = getTelephonyManager(context, subId);
         if (telephonyManager == null) {
             Log.w(LOG_TAG, "getDeviceContactUri: TelephonyManager is null");
@@ -43,7 +53,7 @@ class PublishUtils {
         }
 
         // Get the contact uri from ISIM.
-        Uri contactUri = getContactUriFromIsim(telephonyManager);
+        contactUri = getContactUriFromIsim(telephonyManager);
         if (contactUri != null) {
             Log.d(LOG_TAG, "getDeviceContactUri: impu");
             return contactUri;
@@ -53,23 +63,41 @@ class PublishUtils {
         }
     }
 
+    /**
+     * Find all instances of sip/sips/tel URIs containing PII and replace them.
+     * <p>
+     * This is used for removing PII in logging.
+     * @param source The source string to remove the phone numbers from.
+     * @return A version of the given string with SIP URIs removed.
+     */
+    public static String removeNumbersFromUris(String source) {
+        // Replace only the number portion in the sip/sips/tel URI
+        return source.replaceAll("(?:sips?|tel):(\\+?[\\d\\-]+)", "[removed]");
+    }
+
     private static Uri getContactUriFromIsim(TelephonyManager telephonyManager) {
         // Get the home network domain and the array of the public user identities
         String domain = telephonyManager.getIsimDomain();
         String[] impus = telephonyManager.getIsimImpu();
 
         if (TextUtils.isEmpty(domain) || impus == null) {
+            Log.d(LOG_TAG, "getContactUriFromIsim: domain is null=" + TextUtils.isEmpty(domain));
+            Log.d(LOG_TAG, "getContactUriFromIsim: impu is null=" +
+                    ((impus == null || impus.length == 0) ? "true" : "false"));
             return null;
         }
 
         for (String impu : impus) {
             if (TextUtils.isEmpty(impu)) continue;
             Uri impuUri = Uri.parse(impu);
-            if (SCHEME_SIP.equals(impuUri.getScheme()) &&
-                    impuUri.getSchemeSpecificPart().endsWith(domain)) {
+            String scheme = impuUri.getScheme();
+            String schemeSpecificPart = impuUri.getSchemeSpecificPart();
+            if (SCHEME_SIP.equals(scheme) && !TextUtils.isEmpty(schemeSpecificPart) &&
+                    schemeSpecificPart.endsWith(domain)) {
                 return impuUri;
             }
         }
+        Log.d(LOG_TAG, "getContactUriFromIsim: there is no impu matching the domain");
         return null;
     }
 
