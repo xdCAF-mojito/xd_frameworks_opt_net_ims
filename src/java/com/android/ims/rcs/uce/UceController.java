@@ -406,7 +406,9 @@ public class UceController {
         mPublishController.onDestroy();
         mSubscribeController.onDestroy();
         mOptionsController.onDestroy();
-        mLooper.quit();
+
+        // Execute all the existing requests before quitting the looper.
+        mLooper.quitSafely();
     }
 
     /**
@@ -727,6 +729,16 @@ public class UceController {
     public void removeRequestDisallowedStatus() {
         logd("removeRequestDisallowedStatus");
         mDeviceState.resetDeviceState();
+    }
+
+    /**
+     * Set the milliseconds of capabilities request timeout.
+     * <p>
+     * Used for testing ONLY.
+     */
+    public void setCapabilitiesRequestTimeout(long timeoutAfterMs) {
+        logd("setCapabilitiesRequestTimeout: " + timeoutAfterMs);
+        UceUtils.setCapRequestTimeoutAfterMillis(timeoutAfterMs);
     }
 
     /**
