@@ -63,26 +63,20 @@ public interface PublishController extends ControllerBase {
     /** Publish trigger type: MMTEL capability changes */
     int PUBLISH_TRIGGER_MMTEL_CAPABILITY_CHANGE = 9;
 
-    /** Publish trigger type: MMTEL associated uri changes */
-    int PUBLISH_TRIGGER_MMTEL_URI_CHANGE = 10;
-
     /** Publish trigger type: RCS registered */
-    int PUBLISH_TRIGGER_RCS_REGISTERED = 11;
+    int PUBLISH_TRIGGER_RCS_REGISTERED = 10;
 
     /** Publish trigger type: RCS unregistered */
-    int PUBLISH_TRIGGER_RCS_UNREGISTERED = 12;
-
-    /** Publish trigger type: RCS associated uri changes */
-    int PUBLISH_TRIGGER_RCS_URI_CHANGE = 13;
+    int PUBLISH_TRIGGER_RCS_UNREGISTERED = 11;
 
     /** Publish trigger type: provisioning changes */
-    int PUBLISH_TRIGGER_PROVISIONING_CHANGE = 14;
+    int PUBLISH_TRIGGER_PROVISIONING_CHANGE = 12;
 
     /**The caps have been overridden for a test*/
-    int PUBLISH_TRIGGER_OVERRIDE_CAPS = 15;
+    int PUBLISH_TRIGGER_OVERRIDE_CAPS = 13;
 
     /** The Carrier Config for the subscription has Changed **/
-    int PUBLISH_TRIGGER_CARRIER_CONFIG_CHANGED = 16;
+    int PUBLISH_TRIGGER_CARRIER_CONFIG_CHANGED = 14;
 
     @IntDef(value = {
             PUBLISH_TRIGGER_SERVICE,
@@ -94,10 +88,8 @@ public interface PublishController extends ControllerBase {
             PUBLISH_TRIGGER_MMTEL_REGISTERED,
             PUBLISH_TRIGGER_MMTEL_UNREGISTERED,
             PUBLISH_TRIGGER_MMTEL_CAPABILITY_CHANGE,
-            PUBLISH_TRIGGER_MMTEL_URI_CHANGE,
             PUBLISH_TRIGGER_RCS_REGISTERED,
             PUBLISH_TRIGGER_RCS_UNREGISTERED,
-            PUBLISH_TRIGGER_RCS_URI_CHANGE,
             PUBLISH_TRIGGER_PROVISIONING_CHANGE,
             PUBLISH_TRIGGER_OVERRIDE_CAPS,
             PUBLISH_TRIGGER_CARRIER_CONFIG_CHANGED

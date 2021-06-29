@@ -54,9 +54,7 @@ import com.android.internal.os.SomeArgs;
 import java.io.PrintWriter;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -98,9 +96,8 @@ public class UceController {
          * Refresh the device state. It is called when receive the UCE request response.
          * @param sipCode The SIP code of the request response.
          * @param reason The reason from the network response.
-         * @param type The type of the request
          */
-        void refreshDeviceState(int sipCode, String reason, @RequestType int type);
+        void refreshDeviceState(int sipCode, String reason);
 
         /**
          * Reset the device state when then device disallowed state is expired.
@@ -258,29 +255,6 @@ public class UceController {
         }
     }
 
-    /**
-     * The request type is PUBLISH.
-     */
-    public static final int REQUEST_TYPE_PUBLISH = 1;
-
-    /**
-     * The request type is CAPABILITY.
-     */
-    public static final int REQUEST_TYPE_CAPABILITY = 2;
-
-    @IntDef(value = {
-            REQUEST_TYPE_PUBLISH,
-            REQUEST_TYPE_CAPABILITY,
-    }, prefix="REQUEST_TYPE_")
-    @Retention(RetentionPolicy.SOURCE)
-    public @interface RequestType {}
-
-    public static final Map<Integer, String> REQUEST_TYPE_DESCRIPTION = new HashMap<>();
-    static {
-        REQUEST_TYPE_DESCRIPTION.put(REQUEST_TYPE_PUBLISH, "REQUEST_TYPE_PUBLISH");
-        REQUEST_TYPE_DESCRIPTION.put(REQUEST_TYPE_CAPABILITY, "REQUEST_TYPE_CAPABILITY");
-    }
-
     /** The RCS state is disconnected */
     private static final int RCS_STATE_DISCONNECTED = 0;
 
@@ -432,9 +406,7 @@ public class UceController {
         mPublishController.onDestroy();
         mSubscribeController.onDestroy();
         mOptionsController.onDestroy();
-
-        // Execute all the existing requests before quitting the looper.
-        mLooper.quitSafely();
+        mLooper.quit();
     }
 
     /**
@@ -491,8 +463,8 @@ public class UceController {
         }
 
         @Override
-        public void refreshDeviceState(int sipCode, String reason, @RequestType int type) {
-            mDeviceState.refreshDeviceState(sipCode, reason, type);
+        public void refreshDeviceState(int sipCode, String reason) {
+            mDeviceState.refreshDeviceState(sipCode, reason);
         }
 
         @Override
@@ -755,16 +727,6 @@ public class UceController {
     public void removeRequestDisallowedStatus() {
         logd("removeRequestDisallowedStatus");
         mDeviceState.resetDeviceState();
-    }
-
-    /**
-     * Set the milliseconds of capabilities request timeout.
-     * <p>
-     * Used for testing ONLY.
-     */
-    public void setCapabilitiesRequestTimeout(long timeoutAfterMs) {
-        logd("setCapabilitiesRequestTimeout: " + timeoutAfterMs);
-        UceUtils.setCapRequestTimeoutAfterMillis(timeoutAfterMs);
     }
 
     /**

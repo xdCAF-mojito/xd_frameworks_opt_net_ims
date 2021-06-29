@@ -16,8 +16,6 @@
 
 package com.android.ims.rcs.uce.request;
 
-import static android.telephony.ims.RcsContactUceCapability.SOURCE_TYPE_CACHED;
-
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -87,7 +85,7 @@ public class OptionsRequestTest extends ImsTestBase {
         mFeatureTags.add(FEATURE_TAG_MMTEL_AUDIO_CALL);
         mFeatureTags.add(FEATURE_TAG_MMTEL_VIDEO_CALL);
 
-        OptionsBuilder builder = new OptionsBuilder(mTestContact, SOURCE_TYPE_CACHED);
+        OptionsBuilder builder = new OptionsBuilder(mTestContact);
         builder.addFeatureTag(FEATURE_TAG_CHAT);
         builder.addFeatureTag(FEATURE_TAG_FILE_TRANSFER);
         builder.addFeatureTag(FEATURE_TAG_MMTEL_AUDIO_CALL);

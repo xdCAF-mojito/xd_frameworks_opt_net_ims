@@ -16,26 +16,20 @@
 
 package com.android.ims.rcs.uce.request;
 
-import android.net.Uri;
 import android.telephony.ims.RcsContactTerminatedReason;
 import android.telephony.ims.RcsContactUceCapability;
 import android.telephony.ims.RcsUceAdapter;
 import android.telephony.ims.RcsUceAdapter.ErrorCode;
 import android.telephony.ims.stub.RcsCapabilityExchangeImplBase;
 import android.telephony.ims.stub.RcsCapabilityExchangeImplBase.CommandCode;
-import android.util.Log;
 
-import com.android.ims.rcs.uce.UceController;
 import com.android.ims.rcs.uce.presence.pidfparser.PidfParserUtils;
 import com.android.ims.rcs.uce.util.NetworkSipCode;
-import com.android.ims.rcs.uce.util.UceUtils;
 
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
@@ -45,9 +39,6 @@ import java.util.stream.Collectors;
  * The container of the result of the capabilities request.
  */
 public class CapabilityRequestResponse {
-
-    private static final String LOG_TAG = UceUtils.getLogPrefix() + "CapabilityRequestResp";
-
     // The error code when the request encounters internal errors.
     private @ErrorCode Optional<Integer> mRequestInternalError;
 
@@ -81,9 +72,6 @@ public class CapabilityRequestResponse {
     // The list of the remote contact's capability.
     private Set<String> mRemoteCaps;
 
-    // The collection to record whether the request contacts have received the capabilities updated.
-    private Map<String, Boolean> mContactCapsReceived;
-
     public CapabilityRequestResponse() {
         mRequestInternalError = Optional.empty();
         mCommandError = Optional.empty();
@@ -97,30 +85,6 @@ public class CapabilityRequestResponse {
         mCachedCapabilityList = new ArrayList<>();
         mUpdatedCapabilityList = new ArrayList<>();
         mRemoteCaps = new HashSet<>();
-        mContactCapsReceived = new HashMap<>();
-    }
-
-    /**
-     * Set the request contacts which is expected to receive the capabilities updated.
-     */
-    public synchronized void setRequestContacts(List<Uri> contactUris) {
-        // Convert the given contact uris to the contact numbers.
-        List<String> numbers = contactUris.stream()
-                .map(UceUtils::getContactNumber)
-                .filter(Objects::nonNull)
-                .collect(Collectors.toList());
-
-        // Initialize the default value to FALSE. All the numbers have not received the
-        // capabilities updated.
-        numbers.stream().forEach(contact -> mContactCapsReceived.put(contact, Boolean.FALSE));
-        Log.d(LOG_TAG, "setRequestContacts: size=" + mContactCapsReceived.size());
-    }
-
-    /**
-     * Set the request contacts which is expected to receive the capabilities updated.
-     */
-    public synchronized boolean haveAllRequestCapsUpdatedBeenReceived() {
-        return !(mContactCapsReceived.containsValue(Boolean.FALSE));
     }
 
     /**
@@ -218,14 +182,6 @@ public class CapabilityRequestResponse {
     }
 
     /**
-     * @return The reason of terminating the subscription request. empty string if it has not
-     * been given.
-     */
-    public synchronized String getTerminatedReason() {
-        return mTerminatedReason.orElse("");
-    }
-
-    /**
      * @return Return the retryAfterMillis, 0L if the value is not present.
      */
     public synchronized long getRetryAfterMillis() {
@@ -237,27 +193,6 @@ public class CapabilityRequestResponse {
      */
     public synchronized void addCachedCapabilities(List<RcsContactUceCapability> capabilityList) {
         mCachedCapabilityList.addAll(capabilityList);
-
-        // Update the flag to indicate that these contacts have received the capabilities updated.
-        updateCapsReceivedFlag(capabilityList);
-    }
-
-    /**
-     * Update the flag to indicate that the given contacts have received the capabilities updated.
-     */
-    private synchronized void updateCapsReceivedFlag(List<RcsContactUceCapability> updatedCapList) {
-        for (RcsContactUceCapability updatedCap : updatedCapList) {
-            Uri updatedUri = updatedCap.getContactUri();
-            if (updatedUri == null) continue;
-            String updatedUriStr = updatedUri.toString();
-
-            for (Map.Entry<String, Boolean> contactCapEntry : mContactCapsReceived.entrySet()) {
-                if (updatedUriStr.contains(contactCapEntry.getKey())) {
-                    // Set the flag that this contact has received the capability updated.
-                    contactCapEntry.setValue(true);
-                }
-            }
-        }
     }
 
     /**
@@ -279,9 +214,6 @@ public class CapabilityRequestResponse {
      */
     public synchronized void addUpdatedCapabilities(List<RcsContactUceCapability> capabilityList) {
         mUpdatedCapabilityList.addAll(capabilityList);
-
-        // Update the flag to indicate that these contacts have received the capabilities updated.
-        updateCapsReceivedFlag(capabilityList);
     }
 
     /**
@@ -311,9 +243,6 @@ public class CapabilityRequestResponse {
 
         // Save the terminated resource.
         mTerminatedResource.addAll(capabilityList);
-
-        // Update the flag to indicate that these contacts have received the capabilities updated.
-        updateCapsReceivedFlag(capabilityList);
     }
 
     /*
@@ -447,8 +376,7 @@ public class CapabilityRequestResponse {
             sipError = response.getNetworkRespSipCode().orElse(-1);
             respReason = response.getReasonPhrase().orElse("");
         }
-        return NetworkSipCode.getCapabilityErrorFromSipCode(sipError, respReason,
-                UceController.REQUEST_TYPE_CAPABILITY);
+        return NetworkSipCode.getCapabilityErrorFromSipCode(sipError, respReason);
     }
 
     @Override

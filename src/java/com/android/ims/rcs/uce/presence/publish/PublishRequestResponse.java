@@ -20,11 +20,9 @@ import android.annotation.Nullable;
 import android.telephony.ims.RcsUceAdapter;
 import android.telephony.ims.aidl.IPublishResponseCallback;
 import android.telephony.ims.stub.RcsCapabilityExchangeImplBase;
-import android.util.Log;
 
 import com.android.ims.rcs.uce.presence.publish.PublishController.PublishControllerCallback;
 import com.android.ims.rcs.uce.util.NetworkSipCode;
-import com.android.ims.rcs.uce.util.UceUtils;
 
 import java.time.Instant;
 import java.util.Optional;
@@ -33,8 +31,6 @@ import java.util.Optional;
  * Receiving the result callback of the publish request.
  */
 public class PublishRequestResponse {
-
-    private static final String LOG_TAG = UceUtils.getLogPrefix() + "PublishRequestResp";
 
     private final long mTaskId;
     private final String mPidfXml;
@@ -169,8 +165,6 @@ public class PublishRequestResponse {
         PublishControllerCallback ctrlCallback = mPublishCtrlCallback;
         if (ctrlCallback != null) {
             ctrlCallback.onRequestCommandError(this);
-        } else {
-            Log.d(LOG_TAG, "onCommandError: already destroyed. error code=" + errorCode);
         }
     }
 
@@ -183,8 +177,6 @@ public class PublishRequestResponse {
         PublishControllerCallback ctrlCallback = mPublishCtrlCallback;
         if (ctrlCallback != null) {
             ctrlCallback.onRequestNetworkResp(this);
-        } else {
-            Log.d(LOG_TAG, "onNetworkResponse: already destroyed. sip code=" + sipCode);
         }
     }
 
@@ -200,9 +192,6 @@ public class PublishRequestResponse {
         PublishControllerCallback ctrlCallback = mPublishCtrlCallback;
         if (ctrlCallback != null) {
             ctrlCallback.onRequestNetworkResp(this);
-        } else {
-            Log.d(LOG_TAG, "onNetworkResponse: already destroyed. sipCode=" + sipCode +
-                    ", reasonHeader=" + reasonHeaderCause);
         }
     }
 
@@ -312,9 +301,6 @@ public class PublishRequestResponse {
         switch (respSipCode) {
             case NetworkSipCode.SIP_CODE_OK:
                 return RcsUceAdapter.PUBLISH_STATE_OK;
-            case NetworkSipCode.SIP_CODE_FORBIDDEN:
-            case NetworkSipCode.SIP_CODE_NOT_FOUND:
-                return RcsUceAdapter.PUBLISH_STATE_RCS_PROVISION_ERROR;
             case NetworkSipCode.SIP_CODE_REQUEST_TIMEOUT:
                 return RcsUceAdapter.PUBLISH_STATE_REQUEST_TIMEOUT;
             default:

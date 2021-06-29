@@ -320,10 +320,7 @@ public class EabControllerImpl implements EabController {
             builder.addCapabilityTuple(createPresenceTuple(contactUri, cursor));
             builderWrapper.setPresenceBuilder(builder);
         } else {
-            OptionsBuilder builder = new OptionsBuilder(contactUri, SOURCE_TYPE_CACHED);
-            builder.setRequestResult(result);
-            builder.addFeatureTag(createOptionTuple(cursor));
-            builderWrapper.setOptionsBuilder(builder);
+            builderWrapper.setOptionsBuilder(new OptionsBuilder(contactUri));
         }
         return builderWrapper;
     }
@@ -775,7 +772,7 @@ public class EabControllerImpl implements EabController {
         return formatNumber(context, numberParts[0]);
     }
 
-    static String formatNumber(Context context, String number) {
+    private static String formatNumber(Context context, String number) {
         TelephonyManager manager = context.getSystemService(TelephonyManager.class);
         String simCountryIso = manager.getSimCountryIso();
         if (simCountryIso != null) {

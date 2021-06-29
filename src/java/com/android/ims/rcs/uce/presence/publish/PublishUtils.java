@@ -20,34 +20,22 @@ import android.content.Context;
 import android.net.Uri;
 import android.telephony.PhoneNumberUtils;
 import android.telephony.TelephonyManager;
-import android.telephony.ims.feature.RcsFeature.RcsImsCapabilities;
-import android.telephony.ims.feature.RcsFeature.RcsImsCapabilities.RcsImsCapabilityFlag;
 import android.text.TextUtils;
 import android.util.Log;
 
 import com.android.ims.rcs.uce.util.UceUtils;
 
-import java.util.Arrays;
-
 /**
  * The util class of publishing device's capabilities.
  */
-public class PublishUtils {
+class PublishUtils {
     private static final String LOG_TAG = UceUtils.getLogPrefix() + "PublishUtils";
 
     private static final String SCHEME_SIP = "sip";
     private static final String SCHEME_TEL = "tel";
     private static final String DOMAIN_SEPARATOR = "@";
 
-    public static Uri getDeviceContactUri(Context context, int subId,
-            DeviceCapabilityInfo deviceCap) {
-        // Get the uri from the IMS associated URI which is provided by the IMS service.
-        Uri contactUri = deviceCap.getImsAssociatedUri();
-        if (contactUri != null) {
-            Log.d(LOG_TAG, "getDeviceContactUri: ims associated uri");
-            return contactUri;
-        }
-
+    public static Uri getDeviceContactUri(Context context, int subId) {
         TelephonyManager telephonyManager = getTelephonyManager(context, subId);
         if (telephonyManager == null) {
             Log.w(LOG_TAG, "getDeviceContactUri: TelephonyManager is null");
@@ -55,7 +43,7 @@ public class PublishUtils {
         }
 
         // Get the contact uri from ISIM.
-        contactUri = getContactUriFromIsim(telephonyManager);
+        Uri contactUri = getContactUriFromIsim(telephonyManager);
         if (contactUri != null) {
             Log.d(LOG_TAG, "getDeviceContactUri: impu");
             return contactUri;
@@ -65,41 +53,23 @@ public class PublishUtils {
         }
     }
 
-    /**
-     * Find all instances of sip/sips/tel URIs containing PII and replace them.
-     * <p>
-     * This is used for removing PII in logging.
-     * @param source The source string to remove the phone numbers from.
-     * @return A version of the given string with SIP URIs removed.
-     */
-    public static String removeNumbersFromUris(String source) {
-        // Replace only the number portion in the sip/sips/tel URI
-        return source.replaceAll("(?:sips?|tel):(\\+?[\\d\\-]+)", "[removed]");
-    }
-
     private static Uri getContactUriFromIsim(TelephonyManager telephonyManager) {
         // Get the home network domain and the array of the public user identities
         String domain = telephonyManager.getIsimDomain();
         String[] impus = telephonyManager.getIsimImpu();
 
         if (TextUtils.isEmpty(domain) || impus == null) {
-            Log.d(LOG_TAG, "getContactUriFromIsim: domain is null=" + TextUtils.isEmpty(domain));
-            Log.d(LOG_TAG, "getContactUriFromIsim: impu is null=" +
-                    ((impus == null || impus.length == 0) ? "true" : "false"));
             return null;
         }
 
         for (String impu : impus) {
             if (TextUtils.isEmpty(impu)) continue;
             Uri impuUri = Uri.parse(impu);
-            String scheme = impuUri.getScheme();
-            String schemeSpecificPart = impuUri.getSchemeSpecificPart();
-            if (SCHEME_SIP.equals(scheme) && !TextUtils.isEmpty(schemeSpecificPart) &&
-                    schemeSpecificPart.endsWith(domain)) {
+            if (SCHEME_SIP.equals(impuUri.getScheme()) &&
+                    impuUri.getSchemeSpecificPart().endsWith(domain)) {
                 return impuUri;
             }
         }
-        Log.d(LOG_TAG, "getContactUriFromIsim: there is no impu matching the domain");
         return null;
     }
 
@@ -133,19 +103,6 @@ public class PublishUtils {
             return null;
         } else {
             return telephonyManager.createForSubscriptionId(subId);
-        }
-    }
-
-    static @RcsImsCapabilityFlag int getCapabilityType(Context context, int subId) {
-        boolean isPresenceSupported = UceUtils.isPresenceSupported(context, subId);
-        boolean isSipOptionsSupported = UceUtils.isSipOptionsSupported(context, subId);
-        if (isPresenceSupported) {
-            return RcsImsCapabilities.CAPABILITY_TYPE_PRESENCE_UCE;
-        } else if (isSipOptionsSupported) {
-            return RcsImsCapabilities.CAPABILITY_TYPE_OPTIONS_UCE;
-        } else {
-            // Return NONE when neither OPTIONS nor PRESENCE is supported.
-            return RcsImsCapabilities.CAPABILITY_TYPE_NONE;
         }
     }
 }

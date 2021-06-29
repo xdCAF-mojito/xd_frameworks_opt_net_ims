@@ -26,7 +26,6 @@ import android.telephony.ims.aidl.IRcsUceControllerCallback;
 
 import com.android.ims.rcs.uce.UceDeviceState.DeviceStateResult;
 import com.android.ims.rcs.uce.presence.pidfparser.PidfParserUtils;
-import com.android.ims.rcs.uce.request.SubscriptionTerminatedHelper.TerminatedResult;
 import com.android.ims.rcs.uce.request.UceRequestManager.RequestManagerCallback;
 import com.android.internal.annotations.VisibleForTesting;
 
@@ -116,19 +115,10 @@ public class SubscribeRequestCoordinator extends UceRequestCoordinator {
     // The RequestResult creator of the request terminated.
     private static final RequestResultCreator sTerminatedCreator = (taskId, response,
             requestMgrCallback) -> {
-        // Check the given terminated reason to determine whether clients should retry or not.
-        TerminatedResult terminatedResult = SubscriptionTerminatedHelper.getAnalysisResult(
-                response.getTerminatedReason(), response.getRetryAfterMillis(),
-                response.haveAllRequestCapsUpdatedBeenReceived());
-        if (terminatedResult.getErrorCode().isPresent()) {
-            // If the terminated error code is present, it means that the request is failed.
-            int errorCode = terminatedResult.getErrorCode().get();
-            long terminatedRetry = terminatedResult.getRetryAfterMillis();
-            return RequestResult.createFailedResult(taskId, errorCode, terminatedRetry);
-        } else if (!response.isNetworkResponseOK() || response.getRetryAfterMillis() > 0L) {
-            // If the network response is failed or the retryAfter is not 0, this request is failed.
-            long retryAfterMillis = response.getRetryAfterMillis();
-            int errorCode = CapabilityRequestResponse.getCapabilityErrorFromSipCode(response);
+        long retryAfterMillis = response.getRetryAfterMillis();
+        int errorCode = CapabilityRequestResponse.getCapabilityErrorFromSipCode(response);
+        // If the network response is failed or the retryAfter is not zero, this request is failed.
+        if (!response.isNetworkResponseOK() || retryAfterMillis > 0L) {
             return RequestResult.createFailedResult(taskId, errorCode, retryAfterMillis);
         } else {
             return RequestResult.createSuccessResult(taskId);
@@ -138,11 +128,6 @@ public class SubscribeRequestCoordinator extends UceRequestCoordinator {
     // The RequestResult creator for does not need to request from the network.
     private static final RequestResultCreator sNotNeedRequestFromNetworkCreator =
             (taskId, response, requestMgrCallback) -> RequestResult.createSuccessResult(taskId);
-
-    // The RequestResult creator of the request timeout.
-    private static final RequestResultCreator sRequestTimeoutCreator =
-            (taskId, response, requestMgrCallback) -> RequestResult.createFailedResult(taskId,
-                    RcsUceAdapter.ERROR_REQUEST_TIMEOUT, 0L);
 
     // The callback to notify the result of the capabilities request.
     private volatile IRcsUceControllerCallback mCapabilitiesCallback;
@@ -173,9 +158,7 @@ public class SubscribeRequestCoordinator extends UceRequestCoordinator {
             return;
         }
 
-        logd("onRequestUpdated(SubscribeRequest): taskId=" + taskId + ", event=" +
-                REQUEST_EVENT_DESC.get(event));
-
+        logd("onRequestUpdated: taskId=" + taskId + ", event=" + REQUEST_EVENT_DESC.get(event));
         switch (event) {
             case REQUEST_UPDATE_ERROR:
                 handleRequestError(request);
@@ -201,11 +184,8 @@ public class SubscribeRequestCoordinator extends UceRequestCoordinator {
             case REQUEST_UPDATE_NO_NEED_REQUEST_FROM_NETWORK:
                 handleNoNeedRequestFromNetwork(request);
                 break;
-            case REQUEST_UPDATE_TIMEOUT:
-                handleRequestTimeout(request);
-                break;
             default:
-                logw("onRequestUpdated(SubscribeRequest): invalid event " + event);
+                logw("onRequestUpdated: invalid event " + event);
                 break;
         }
 
@@ -401,24 +381,6 @@ public class SubscribeRequestCoordinator extends UceRequestCoordinator {
         moveRequestToFinishedCollection(taskId, requestResult);
     }
 
-    /**
-     * This method is called when the framework does not receive receive the result for
-     * capabilities request.
-     */
-    private void handleRequestTimeout(SubscribeRequest request) {
-        CapabilityRequestResponse response = request.getRequestResponse();
-        logd("handleRequestTimeout: " + response);
-
-        // Finish this request
-        request.onFinish();
-
-        // Remove this request from the activated collection and notify RequestManager.
-        long taskId = request.getTaskId();
-        RequestResult requestResult = sRequestTimeoutCreator.createRequestResult(taskId,
-                response, mRequestManagerCallback);
-        moveRequestToFinishedCollection(taskId, requestResult);
-    }
-
     private void checkAndFinishRequestCoordinator() {
         synchronized (mCollectionLock) {
             // Return because there are requests running.
@@ -447,7 +409,7 @@ public class SubscribeRequestCoordinator extends UceRequestCoordinator {
             // Notify UceRequestManager to remove this instance from the collection.
             mRequestManagerCallback.notifyRequestCoordinatorFinished(mCoordinatorId);
 
-            logd("checkAndFinishRequestCoordinator(SubscribeRequest) done, id=" + mCoordinatorId);
+            logd("checkAndFinishRequestCoordinator: id=" + mCoordinatorId);
         }
     }
 

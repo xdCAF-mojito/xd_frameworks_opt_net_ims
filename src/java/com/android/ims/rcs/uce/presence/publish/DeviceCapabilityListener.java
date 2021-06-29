@@ -22,7 +22,6 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.database.ContentObserver;
-import android.net.Uri;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.Looper;
@@ -53,7 +52,6 @@ import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.telephony.util.HandlerExecutor;
 
 import java.io.PrintWriter;
-import java.util.Objects;
 
 /**
  * Listen to the device changes and notify the PublishController to publish the device's
@@ -459,14 +457,6 @@ public class DeviceCapabilityListener {
                         handleImsRcsUnregistered();
                     }
                 }
-
-                @Override
-                public void onSubscriberAssociatedUriChanged(Uri[] uris) {
-                    synchronized (mLock) {
-                        logi("onRcsSubscriberAssociatedUriChanged");
-                        handleRcsSubscriberAssociatedUriChanged(uris, true);
-                    }
-                }
     };
 
     @VisibleForTesting
@@ -488,14 +478,6 @@ public class DeviceCapabilityListener {
                         logi("onMmTelUnregistered: " + info);
                         if (!mIsImsCallbackRegistered) return;
                         handleImsMmtelUnregistered();
-                    }
-                }
-
-                @Override
-                public void onSubscriberAssociatedUriChanged(Uri[] uris) {
-                    synchronized (mLock) {
-                        logi("onMmTelSubscriberAssociatedUriChanged");
-                        handleMmTelSubscriberAssociatedUriChanged(uris, true);
                     }
                 }
             };
@@ -583,28 +565,8 @@ public class DeviceCapabilityListener {
      */
     private void handleImsMmtelUnregistered() {
         mCapabilityInfo.updateImsMmtelUnregistered();
-        // When the MMTEL is unregistered, the mmtel associated uri should be cleared.
-        handleMmTelSubscriberAssociatedUriChanged(null, false);
         mHandler.sendTriggeringPublishMessage(
                 PublishController.PUBLISH_TRIGGER_MMTEL_UNREGISTERED);
-    }
-
-    /*
-     * This method is called when the MMTEL associated uri has changed.
-     */
-    private void handleMmTelSubscriberAssociatedUriChanged(Uri[] uris, boolean triggerPublish) {
-        Uri originalUri = mCapabilityInfo.getMmtelAssociatedUri();
-        mCapabilityInfo.updateMmTelAssociatedUri(uris);
-        Uri currentUri = mCapabilityInfo.getMmtelAssociatedUri();
-
-        boolean hasChanged = !(Objects.equals(originalUri, currentUri));
-        logi("handleMmTelSubscriberAssociatedUriChanged: triggerPublish=" + triggerPublish +
-                ", hasChanged=" + hasChanged);
-
-        if (triggerPublish && hasChanged) {
-            mHandler.sendTriggeringPublishMessage(
-                    PublishController.PUBLISH_TRIGGER_MMTEL_URI_CHANGE);
-        }
     }
 
     private void handleMmtelCapabilitiesStatusChanged(MmTelCapabilities capabilities) {
@@ -629,30 +591,9 @@ public class DeviceCapabilityListener {
      * This method is called when RCS is unregistered.
      */
     private void handleImsRcsUnregistered() {
-        boolean hasChanged = mCapabilityInfo.updateImsRcsUnregistered();
-        // When the RCS is unregistered, the rcs associated uri should be cleared.
-        handleRcsSubscriberAssociatedUriChanged(null, false);
-        // Trigger publish if the state has changed.
-        if (hasChanged) {
+        if (mCapabilityInfo.updateImsRcsUnregistered()) {
             mHandler.sendTriggeringPublishMessage(
                     PublishController.PUBLISH_TRIGGER_RCS_UNREGISTERED);
-        }
-    }
-
-    /*
-     * This method is called when the RCS associated uri has changed.
-     */
-    private void handleRcsSubscriberAssociatedUriChanged(Uri[] uris, boolean triggerPublish) {
-        Uri originalUri = mCapabilityInfo.getRcsAssociatedUri();
-        mCapabilityInfo.updateRcsAssociatedUri(uris);
-        Uri currentUri = mCapabilityInfo.getRcsAssociatedUri();
-
-        boolean hasChanged = !(Objects.equals(originalUri, currentUri));
-        logi("handleRcsSubscriberAssociatedUriChanged: triggerPublish=" + triggerPublish +
-                ", hasChanged=" + hasChanged);
-
-        if (triggerPublish && hasChanged) {
-            mHandler.sendTriggeringPublishMessage(PublishController.PUBLISH_TRIGGER_RCS_URI_CHANGE);
         }
     }
 

@@ -18,9 +18,6 @@ package com.android.ims.rcs.uce.util;
 
 import android.telephony.ims.RcsUceAdapter;
 
-import com.android.ims.rcs.uce.UceController;
-import com.android.ims.rcs.uce.UceController.RequestType;
-
 /**
  * Define the network sip code and the reason.
  */
@@ -54,39 +51,26 @@ public class NetworkSipCode {
      * Convert the given SIP CODE to the Contact uce capabilities error.
      * @param sipCode The SIP code of the request response.
      * @param reason The reason of the request response.
-     * @param requestType The type of this request.
      * @return The RCS contact UCE capabilities error which is defined in RcsUceAdapter.
      */
-    public static int getCapabilityErrorFromSipCode(int sipCode, String reason,
-            @RequestType int requestType) {
+    public static int getCapabilityErrorFromSipCode(int sipCode, String reason) {
         int uceError;
         switch (sipCode) {
             case NetworkSipCode.SIP_CODE_FORBIDDEN:   // 403
-                if(requestType == UceController.REQUEST_TYPE_PUBLISH) {
-                    // Not provisioned for PUBLISH request.
+                if (NetworkSipCode.SIP_NOT_REGISTERED.equalsIgnoreCase(reason)) {
+                    // Not registered with IMS. Device shall register to IMS.
+                    uceError = RcsUceAdapter.ERROR_NOT_REGISTERED;
+                } else if (NetworkSipCode.SIP_NOT_AUTHORIZED_FOR_PRESENCE.equalsIgnoreCase(
+                        reason)) {
+                    // Not provisioned for EAB. Device shall not retry.
                     uceError = RcsUceAdapter.ERROR_NOT_AUTHORIZED;
                 } else {
-                    // Check the reason for CAPABILITY request
-                    if (NetworkSipCode.SIP_NOT_REGISTERED.equalsIgnoreCase(reason)) {
-                        // Not registered with IMS. Device shall register to IMS.
-                        uceError = RcsUceAdapter.ERROR_NOT_REGISTERED;
-                    } else if (NetworkSipCode.SIP_NOT_AUTHORIZED_FOR_PRESENCE.equalsIgnoreCase(
-                            reason)) {
-                        // Not provisioned for EAB. Device shall not retry.
-                        uceError = RcsUceAdapter.ERROR_NOT_AUTHORIZED;
-                    } else {
-                        // The network has responded SIP 403 error with no reason.
-                        uceError = RcsUceAdapter.ERROR_FORBIDDEN;
-                    }
+                    // The network has responded SIP 403 error with no reason.
+                    uceError = RcsUceAdapter.ERROR_FORBIDDEN;
                 }
                 break;
             case NetworkSipCode.SIP_CODE_NOT_FOUND:              // 404
-                if(requestType == UceController.REQUEST_TYPE_PUBLISH) {
-                    // Not provisioned for PUBLISH request.
-                    uceError = RcsUceAdapter.ERROR_NOT_AUTHORIZED;
-                } else {
-                    uceError = RcsUceAdapter.ERROR_NOT_FOUND;
-                }
+                uceError = RcsUceAdapter.ERROR_NOT_FOUND;
                 break;
             case NetworkSipCode.SIP_CODE_REQUEST_TIMEOUT:        // 408
                 uceError = RcsUceAdapter.ERROR_REQUEST_TIMEOUT;
