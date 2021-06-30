@@ -20,6 +20,7 @@ import static android.telephony.ims.stub.RcsCapabilityExchangeImplBase.COMMAND_C
 
 import android.os.RemoteException;
 import android.telephony.ims.RcsContactUceCapability;
+import android.telephony.ims.RcsUceAdapter;
 import android.telephony.ims.aidl.IRcsUceControllerCallback;
 
 import com.android.ims.rcs.uce.request.UceRequestManager.RequestManagerCallback;
@@ -92,6 +93,15 @@ public class OptionsRequestCoordinator extends UceRequestCoordinator {
         }
     };
 
+    // The RequestResult creator for does not need to request from the network.
+    private static final RequestResultCreator sNotNeedRequestFromNetworkCreator =
+            (taskId, response) -> RequestResult.createSuccessResult(taskId);
+
+    // The RequestResult creator of the request timeout.
+    private static final RequestResultCreator sRequestTimeoutCreator =
+            (taskId, response) -> RequestResult.createFailedResult(taskId,
+                    RcsUceAdapter.ERROR_REQUEST_TIMEOUT, 0L);
+
     // The callback to notify the result of the capabilities request.
     private IRcsUceControllerCallback mCapabilitiesCallback;
 
@@ -121,7 +131,9 @@ public class OptionsRequestCoordinator extends UceRequestCoordinator {
             return;
         }
 
-        logd("onRequestUpdated: taskId=" + taskId + ", event=" + REQUEST_EVENT_DESC.get(event));
+        logd("onRequestUpdated(OptionsRequest): taskId=" + taskId + ", event=" +
+                REQUEST_EVENT_DESC.get(event));
+
         switch (event) {
             case REQUEST_UPDATE_ERROR:
                 handleRequestError(request);
@@ -132,8 +144,17 @@ public class OptionsRequestCoordinator extends UceRequestCoordinator {
             case REQUEST_UPDATE_NETWORK_RESPONSE:
                 handleNetworkResponse(request);
                 break;
+            case REQUEST_UPDATE_CACHED_CAPABILITY_UPDATE:
+                handleCachedCapabilityUpdated(request);
+                break;
+            case REQUEST_UPDATE_NO_NEED_REQUEST_FROM_NETWORK:
+                handleNoNeedRequestFromNetwork(request);
+                break;
+            case REQUEST_UPDATE_TIMEOUT:
+                handleRequestTimeout(request);
+                break;
             default:
-                logw("onRequestUpdated: invalid event " + event);
+                logw("onRequestUpdated(OptionsRequest): invalid event " + event);
                 break;
         }
 
@@ -196,6 +217,60 @@ public class OptionsRequestCoordinator extends UceRequestCoordinator {
         // Remove this request from the activated collection and notify RequestManager.
         Long taskId = request.getTaskId();
         RequestResult requestResult = sNetworkRespCreator.createRequestResult(taskId, response);
+        moveRequestToFinishedCollection(taskId, requestResult);
+    }
+
+    /**
+     * This method is called when the OptionsRequest retrieves the capabilities from cache.
+     */
+    private void handleCachedCapabilityUpdated(OptionsRequest request) {
+        CapabilityRequestResponse response = request.getRequestResponse();
+        Long taskId = request.getTaskId();
+        List<RcsContactUceCapability> cachedCapList = response.getCachedContactCapability();
+        logd("handleCachedCapabilityUpdated: taskId=" + taskId + ", CapRequestResp=" + response);
+
+        if (cachedCapList.isEmpty()) {
+            return;
+        }
+
+        // Trigger the capabilities updated callback.
+        triggerCapabilitiesReceivedCallback(cachedCapList);
+        response.removeCachedContactCapabilities();
+    }
+
+    /**
+     * This method is called when all the capabilities can be retrieved from the cached and it does
+     * not need to request capabilities from the network.
+     */
+    private void handleNoNeedRequestFromNetwork(OptionsRequest request) {
+        CapabilityRequestResponse response = request.getRequestResponse();
+        logd("handleNoNeedRequestFromNetwork: " + response.toString());
+
+        // Finish this request.
+        request.onFinish();
+
+        // Remove this request from the activated collection and notify RequestManager.
+        long taskId = request.getTaskId();
+        RequestResult requestResult = sNotNeedRequestFromNetworkCreator.createRequestResult(taskId,
+                response);
+        moveRequestToFinishedCollection(taskId, requestResult);
+    }
+
+    /**
+     * This method is called when the framework does not receive receive the result for
+     * capabilities request.
+     */
+    private void handleRequestTimeout(OptionsRequest request) {
+        CapabilityRequestResponse response = request.getRequestResponse();
+        logd("handleRequestTimeout: " + response.toString());
+
+        // Finish this request.
+        request.onFinish();
+
+        // Remove this request from the activated collection and notify RequestManager.
+        long taskId = request.getTaskId();
+        RequestResult requestResult = sRequestTimeoutCreator.createRequestResult(taskId,
+                response);
         moveRequestToFinishedCollection(taskId, requestResult);
     }
 
@@ -269,7 +344,7 @@ public class OptionsRequestCoordinator extends UceRequestCoordinator {
             // Notify UceRequestManager to remove this instance from the collection.
             mRequestManagerCallback.notifyRequestCoordinatorFinished(mCoordinatorId);
 
-            logd("checkAndFinishRequestCoordinator done, id=" + mCoordinatorId);
+            logd("checkAndFinishRequestCoordinator(OptionsRequest) done, id=" + mCoordinatorId);
         }
     }
 

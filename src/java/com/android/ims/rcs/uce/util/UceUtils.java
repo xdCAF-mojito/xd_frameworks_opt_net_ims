@@ -18,6 +18,7 @@ package com.android.ims.rcs.uce.util;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.net.Uri;
 import android.os.PersistableBundle;
 import android.preference.PreferenceManager;
 import android.provider.BlockedNumberContract;
@@ -46,6 +47,10 @@ public class UceUtils {
     private static final long DEFAULT_NON_RCS_CAPABILITIES_CACHE_EXPIRATION_SEC =
             TimeUnit.DAYS.toSeconds(30);
     private static final long DEFAULT_REQUEST_RETRY_INTERVAL_MS = TimeUnit.MINUTES.toMillis(20);
+    private static final long DEFAULT_MINIMUM_REQUEST_RETRY_AFTER_MS = TimeUnit.SECONDS.toMillis(3);
+
+    private static final long DEFAULT_CAP_REQUEST_TIMEOUT_AFTER_MS = TimeUnit.MINUTES.toMillis(1);
+    private static Optional<Long> OVERRIDE_CAP_REQUEST_TIMEOUT_AFTER_MS = Optional.empty();
 
     // The task ID of the UCE request
     private static long TASK_ID = 0L;
@@ -340,5 +345,58 @@ public class UceUtils {
         }
         builder.append(",").append(exitStateTimeMillis);   // exit state time
         return builder.toString();
+    }
+
+    /**
+     * Get the minimum value of the capabilities request retry after.
+     */
+    public static long getMinimumRequestRetryAfterMillis() {
+        return DEFAULT_MINIMUM_REQUEST_RETRY_AFTER_MS;
+    }
+
+    /**
+     * Override the capability request timeout to the millisecond value specified. Sending a
+     * value <= 0 will reset the capabilities.
+     */
+    public static synchronized void setCapRequestTimeoutAfterMillis(long timeoutAfterMs) {
+        if (timeoutAfterMs <= 0L) {
+            OVERRIDE_CAP_REQUEST_TIMEOUT_AFTER_MS = Optional.empty();
+        } else {
+            OVERRIDE_CAP_REQUEST_TIMEOUT_AFTER_MS = Optional.of(timeoutAfterMs);
+        }
+    }
+
+    /**
+     * Get the milliseconds of the capabilities request timed out.
+     * @return the time in milliseconds before a pending capabilities request will time out.
+     */
+    public static synchronized long getCapRequestTimeoutAfterMillis() {
+        if(OVERRIDE_CAP_REQUEST_TIMEOUT_AFTER_MS.isPresent()) {
+            return OVERRIDE_CAP_REQUEST_TIMEOUT_AFTER_MS.get();
+        } else {
+            return DEFAULT_CAP_REQUEST_TIMEOUT_AFTER_MS;
+        }
+    }
+
+    /**
+     * Get the contact number from the given URI.
+     * @param contactUri The contact uri of the capabilities to request for.
+     * @return The number of the contact uri. NULL if the number cannot be retrieved.
+     */
+    public static String getContactNumber(Uri contactUri) {
+        if (contactUri == null) {
+            return null;
+        }
+        String number = contactUri.getSchemeSpecificPart();
+        if (TextUtils.isEmpty(number)) {
+            return null;
+        }
+
+        String numberParts[] = number.split("[@;:]");
+        if (numberParts.length == 0) {
+            Log.d(LOG_TAG, "getContactNumber: the length of numberPars is 0");
+            return contactUri.toString();
+        }
+        return numberParts[0];
     }
 }
