@@ -2639,8 +2639,10 @@ public class ImsManager implements FeatureUpdates {
         CapabilityChangeRequest request = new CapabilityChangeRequest();
         updateVoiceCellFeatureValue(request, isNonTtyOrTtyOnVolteEnabled);
         updateVideoCallFeatureValue(request, isNonTtyOrTtyOnVolteEnabled);
+        // update MMTEL caps for the new configuration.
+        changeMmTelCapability(request);
         if (isImsNeeded(request)) {
-            changeMmTelCapability(request);
+            // Only turn on IMS if voice/video is enabled now in the new configuration.
             turnOnIms();
         }
     }
