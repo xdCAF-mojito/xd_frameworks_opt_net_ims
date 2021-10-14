@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019 The Android Open Source Project
+ * Copyright (C) 2020 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,11 +14,8 @@
  * limitations under the License.
  */
 
-package com.android.ims;
+package com.android.ims.rcs.uce.presence.pidfparser.capabilities;
 
-public interface IFeatureConnector<T> {
-    int getImsServiceState() throws ImsException;
-    void addNotifyStatusChangedCallbackIfAvailable(FeatureConnection.IFeatureUpdate callback)
-            throws android.telephony.ims.ImsException;
-    void removeNotifyStatusChangedCallback(FeatureConnection.IFeatureUpdate callback);
+public class CapsConstant {
+    public static final String NAMESPACE = "urn:ietf:params:xml:ns:pidf:caps";
 }
